@@ -47,6 +47,17 @@ from .const import (
 _LOGGER = logging.getLogger(__name__)
 
 
+def _safe_str(val: Any) -> str:
+    """Safely convert any registry alias, name, or ComputedNameType to a clean string."""
+    if val is None:
+        return ""
+    if isinstance(val, str):
+        return val.strip()
+    if hasattr(val, "name") and isinstance(val.name, str):
+        return val.name.strip()
+    return str(val).strip()
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -261,13 +272,17 @@ class LayaConversationEntity(ConversationEntity):
             areas = area_reg.async_list_areas()
 
         for area in areas:
-            area_name_clean = area.name.strip()
-            area_map[area.id] = area_name_clean
-            target_map[area_name_clean] = {"type": "area", "id": area.id}
+            area_name_clean = _safe_str(area.name)
+            if area_name_clean:
+                area_map[area.id] = area_name_clean
+                target_map[area_name_clean] = {"type": "area", "id": area.id}
+
             # Also register area aliases if present
             if hasattr(area, "aliases") and area.aliases:
                 for alias in area.aliases:
-                    target_map[alias.strip()] = {"type": "area", "id": area.id}
+                    alias_str = _safe_str(alias)
+                    if alias_str:
+                        target_map[alias_str] = {"type": "area", "id": area.id}
 
         # 2. Add Entities
         ent_reg = entity_registry.async_get(self.hass)
@@ -278,15 +293,17 @@ class LayaConversationEntity(ConversationEntity):
 
             entity_id = state.entity_id
             friendly_name = state.attributes.get("friendly_name")
-            name_to_use = (friendly_name or entity_id).strip()
+            name_to_use = _safe_str(friendly_name) or entity_id
 
             target_map[name_to_use] = {"type": "entity", "id": entity_id}
 
-            # Check entity registry for extra aliases
+            # Check entity registry for extra aliases (safely handles ComputedNameType)
             ent_entry = ent_reg.async_get(entity_id)
-            if ent_entry and ent_entry.aliases:
+            if ent_entry and hasattr(ent_entry, "aliases") and ent_entry.aliases:
                 for alias in ent_entry.aliases:
-                    target_map[alias.strip()] = {"type": "entity", "id": entity_id}
+                    alias_str = _safe_str(alias)
+                    if alias_str:
+                        target_map[alias_str] = {"type": "entity", "id": entity_id}
 
         return target_map, area_map
 
