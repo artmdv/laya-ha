@@ -300,6 +300,111 @@ class TestDecisionLogic(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(resolved_area)
         self.assertEqual(mock_client.query.call_count, 2)
 
+    async def test_hierarchical_routing_direct_area_match(self):
+        """Verify direct room mention (e.g. virtuvėj) selects the area and filters candidates."""
+        mock_client = MagicMock()
+        mock_client.query = AsyncMock(
+            side_effect=[
+                {
+                    "action": DecisionChoice(choice="turn_on", confidence=0.85, probabilities={}),
+                    "area": DecisionChoice(choice="none", confidence=0.10, probabilities={}),
+                },
+                {
+                    "target": DecisionChoice(choice="Virtuvės šviestuvas", confidence=0.90, probabilities={}),
+                },
+            ]
+        )
+
+        mock_hass = MagicMock()
+        mock_area = MagicMock()
+        mock_area.name = "Virtuvė"
+        mock_area.id = "kitchen_id"
+        mock_hass.data = {}
+
+        mock_area_reg = MagicMock()
+        mock_area_reg.areas.values.return_value = [mock_area]
+
+        entity = LayaConversationEntity(
+            hass=mock_hass,
+            entry=MagicMock(),
+            client=mock_client,
+        )
+
+        area_map = {"kitchen_id": "Virtuvė"}
+        target_map = {
+            "Laukas": {"type": "area", "id": "laukas", "domain": "homeassistant"},
+            "Virtuvės šviestuvas": {"type": "entity", "id": "light.kitchen_lamp", "domain": "light", "area_id": "kitchen_id"},
+        }
+
+        with unittest.mock.patch.object(
+            entity,
+            "_get_entities_in_area",
+            return_value={
+                "Virtuvės šviestuvas": {
+                    "type": "entity",
+                    "id": "light.kitchen_lamp",
+                    "domain": "light",
+                },
+                "Virtuvės LED": {
+                    "type": "entity",
+                    "id": "light.kitchen_led",
+                    "domain": "light",
+                },
+            },
+        ):
+            action_choice, target_choice, result_targets, resolved_area = (
+                await entity._async_process_hierarchical(
+                    text="įjunk šviesą virtuvėj",
+                    action_criteria={"turn_on": "Turn on"},
+                    target_map=target_map,
+                    area_map=area_map,
+                    exposed_domains=["light"],
+                    confidence_threshold=0.50,
+                )
+            )
+
+        self.assertEqual(resolved_area, "Virtuvė")
+        self.assertEqual(target_choice.choice, "Virtuvės šviestuvas")
+        self.assertIn("Virtuvės šviestuvas", result_targets)
+        self.assertNotIn("Laukas", result_targets)
+
+    async def test_interrogative_question_override_to_query_state(self):
+        """Verify questions starting with 'ar' override any action command to query_state."""
+        mock_client = MagicMock()
+        decision_mock = MagicMock()
+        decision_mock.action = DecisionChoice(choice="turn_on", confidence=0.65, probabilities={})
+        decision_mock.target = DecisionChoice(choice="Virtuvės šviesa", confidence=0.88, probabilities={})
+        mock_client.decide = AsyncMock(return_value=decision_mock)
+
+        mock_hass = MagicMock()
+        light_state = MagicMock()
+        light_state.state = "on"
+        light_state.attributes = {"friendly_name": "Virtuvės šviesa"}
+        mock_hass.states.get.return_value = light_state
+
+        entity = LayaConversationEntity(
+            hass=mock_hass,
+            entry=MagicMock(),
+            client=mock_client,
+        )
+
+        user_input = MagicMock()
+        user_input.text = "ar virtuvėj įjungta šviesa?"
+        user_input.language = "lt"
+        user_input.conversation_id = "test_conv"
+
+        with unittest.mock.patch.object(entity, "_build_target_catalog") as mock_cat:
+            mock_cat.return_value = (
+                {"Virtuvės šviesa": {"type": "entity", "id": "light.kitchen", "domain": "light"}},
+                {"kitchen_id": "Virtuvė"},
+            )
+            entity.entry.options = {"hierarchical_routing": False}
+            res = await entity._async_process_internal(user_input)
+
+            # It must NOT execute turn_on, but rather query the state
+            mock_hass.services.async_call.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()
+

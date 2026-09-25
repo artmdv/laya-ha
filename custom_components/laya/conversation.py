@@ -278,6 +278,33 @@ class LayaConversationEntity(ConversationEntity):
                 target_choice.confidence,
                 resolved_area or "none",
             )
+        # Interrogative check: 'ar ...' or trailing '?' indicates an inquiry, never a command
+        text_lower = text.lower()
+        is_question = (
+            text_lower.startswith("ar ")
+            or text.strip().endswith("?")
+            or text_lower.startswith("is ")
+            or text_lower.startswith("what ")
+            or text_lower.startswith("kokia ")
+            or text_lower.startswith("koks ")
+            or text_lower.startswith("kiek ")
+        )
+        if is_question and action_choice.choice in (
+            "turn_on",
+            "turn_off",
+            "toggle",
+            "open_cover",
+            "close_cover",
+        ):
+            _LOGGER.debug(
+                "Overriding action '%s' to 'query_state' due to interrogative question syntax",
+                action_choice.choice,
+            )
+            action_choice = DecisionChoice(
+                choice="query_state",
+                confidence=max(action_choice.confidence, 0.90),
+                probabilities=action_choice.probabilities,
+            )
 
         debug_lines = []
         if resolved_area:
@@ -468,14 +495,28 @@ class LayaConversationEntity(ConversationEntity):
             area_choice.confidence,
         )
 
-        # Check if an area was identified with reasonable confidence
-        if (
+        # Check if an area is directly mentioned in the command or identified by Laya
+        text_lower = text.lower()
+        direct_matched_area = None
+        for clean_name in name_to_area_id:
+            c_lower = clean_name.lower()
+            stem = c_lower[:4] if len(c_lower) >= 4 else c_lower
+            if stem in text_lower or c_lower in text_lower:
+                direct_matched_area = clean_name
+                break
+
+        chosen_area_name = None
+        if direct_matched_area:
+            chosen_area_name = direct_matched_area
+        elif (
             area_choice.choice
             and area_choice.choice != "none"
             and area_choice.choice in name_to_area_id
-            and area_choice.confidence >= confidence_threshold
+            and area_choice.confidence >= 0.25
         ):
             chosen_area_name = area_choice.choice
+
+        if chosen_area_name:
             chosen_area_id = name_to_area_id[chosen_area_name]
 
             # Gather entities in this area
