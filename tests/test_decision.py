@@ -6,6 +6,13 @@ from unittest.mock import MagicMock
 
 if "homeassistant" not in sys.modules:
     ha_mock = MagicMock()
+
+    class _MockConversationEntity:
+        pass
+
+    ha_mock.ConversationEntity = _MockConversationEntity
+    ha_mock.components.conversation.ConversationEntity = _MockConversationEntity
+
     for mod in [
         "homeassistant",
         "homeassistant.config_entries",
@@ -26,9 +33,11 @@ from custom_components.laya.const import (
     ACTION_DEFINITIONS,
     DEFAULT_EXPOSED_DOMAINS,
     LOCALIZED_RESPONSES,
+    MAX_TARGET_CANDIDATES,
     STYLE_CONCISE,
     STYLE_VERBOSE,
 )
+from custom_components.laya.conversation import LayaConversationEntity
 
 
 class TestDecisionLogic(unittest.TestCase):
@@ -118,6 +127,81 @@ class TestDecisionLogic(unittest.TestCase):
         status = "uždaryta"
         formatted_gate = f"{gate} yra {status}"
         self.assertEqual(formatted_gate, "Kiemo vartai yra uždaryta")
+
+    def test_filter_candidates_below_limit(self):
+        """When total candidates are within limit, all candidates should be returned."""
+        catalog = {
+            f"device_{i}": {"type": "entity", "id": f"light.dev_{i}", "domain": "light"}
+            for i in range(10)
+        }
+        res = LayaConversationEntity._filter_target_candidates("turn on light", catalog, max_limit=160)
+        self.assertEqual(len(res), 10)
+        self.assertEqual(set(res), set(catalog.keys()))
+
+    def test_filter_candidates_exceeding_limit_prioritizes_match_and_devices(self):
+        """When candidates exceed head_max_len limit, relevant targets must be prioritized."""
+        catalog = {}
+        # 5 areas
+        catalog["Virtuvė"] = {"type": "area", "id": "kitchen", "domain": "area"}
+        catalog["Svetainė"] = {"type": "area", "id": "living_room", "domain": "area"}
+        catalog["Miegamasis"] = {"type": "area", "id": "bedroom", "domain": "area"}
+        catalog["Vonios kambarys"] = {"type": "area", "id": "bathroom", "domain": "area"}
+        catalog["Kiemas"] = {"type": "area", "id": "yard", "domain": "area"}
+
+        # Controllable matching devices
+        catalog["Virtuvės šviestuvas"] = {"type": "entity", "id": "light.kitchen_main", "domain": "light"}
+        catalog["Svetainės šviesa"] = {"type": "entity", "id": "light.living_main", "domain": "light"}
+
+        # 300 background sensor entities
+        for i in range(300):
+            catalog[f"Serverio CPU apkrova {i}"] = {
+                "type": "entity",
+                "id": f"sensor.cpu_{i}",
+                "domain": "sensor",
+            }
+
+        filtered = LayaConversationEntity._filter_target_candidates(
+            text="įjunk šviesą virtuvėj",
+            target_map=catalog,
+            max_limit=50,
+        )
+
+        self.assertEqual(len(filtered), 50)
+        # Check that top candidates contain the exact matches
+        self.assertIn("Virtuvės šviestuvas", filtered[:5])
+        self.assertIn("Virtuvė", filtered[:5])
+        self.assertIn("Svetainės šviesa", filtered)
+
+    def test_filter_candidates_state_query_prioritizes_sensor(self):
+        """Sensors matching state query terms should be prioritized in candidates."""
+        catalog = {}
+        # 250 irrelevant switches
+        for i in range(250):
+            catalog[f"Relė {i}"] = {
+                "type": "entity",
+                "id": f"switch.relay_{i}",
+                "domain": "switch",
+            }
+
+        catalog["Lauko temperatūra"] = {
+            "type": "entity",
+            "id": "sensor.outdoor_temp",
+            "domain": "sensor",
+        }
+        catalog["Kiemo vartai"] = {
+            "type": "entity",
+            "id": "binary_sensor.gate_state",
+            "domain": "binary_sensor",
+        }
+
+        filtered = LayaConversationEntity._filter_target_candidates(
+            text="kokia lauko temperatūra?",
+            target_map=catalog,
+            max_limit=10,
+        )
+
+        self.assertEqual(len(filtered), 10)
+        self.assertEqual(filtered[0], "Lauko temperatūra")
 
 
 if __name__ == "__main__":

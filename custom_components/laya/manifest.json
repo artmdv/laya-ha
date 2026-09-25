@@ -6,6 +6,6 @@
   "documentation": "https://github.com/NandhaKishorM/laya",
   "integration_type": "service",
   "iot_class": "local_polling",
-  "version": "1.1.4",
+  "version": "1.1.5",
   "requirements": []
 }

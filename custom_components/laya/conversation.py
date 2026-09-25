@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 from homeassistant.components import conversation
@@ -41,6 +42,7 @@ from .const import (
     DOMAIN,
     LOCALIZED_RESPONSES,
     LOCALIZED_STATES,
+    MAX_TARGET_CANDIDATES,
     STYLE_VERBOSE,
 )
 
@@ -56,6 +58,70 @@ def _safe_str(val: Any) -> str:
     if hasattr(val, "name") and isinstance(val.name, str):
         return val.name.strip()
     return str(val).strip()
+
+
+def filter_target_candidates(
+    text: str,
+    target_map: dict[str, dict[str, Any]],
+    max_limit: int = MAX_TARGET_CANDIDATES,
+) -> list[str]:
+    """Intelligently prioritize target candidates to stay safely within Laya head_max_len."""
+    if len(target_map) <= max_limit:
+        return list(target_map.keys())
+
+    text_lower = text.lower()
+    # Word tokens of length >= 2
+    tokens = [t for t in re.findall(r"\w+", text_lower) if len(t) >= 2]
+    # Word stems (e.g. 4 chars prefix) to match inflected language forms
+    stems = [t[:4] for t in tokens if len(t) >= 4]
+
+    scored_targets: list[tuple[float, str]] = []
+
+    for name, meta in target_map.items():
+        name_lower = name.lower()
+        score = 0.0
+
+        target_type = meta.get("type")
+        domain = meta.get("domain", "")
+
+        # 1. Base architectural weights
+        if target_type == "area":
+            score += 15.0  # Areas are primary room targets
+        elif domain in (
+            "light",
+            "switch",
+            "cover",
+            "vacuum",
+            "climate",
+            "fan",
+            "lock",
+            "media_player",
+        ):
+            score += 8.0  # Common actionable home devices
+        else:
+            score += 2.0  # Diagnostic and background sensors
+
+        # 2. Text matching bonuses
+        if name_lower in text_lower:
+            score += 50.0
+        else:
+            name_words = re.findall(r"\w+", name_lower)
+            for token in tokens:
+                for nw in name_words:
+                    if token == nw:
+                        score += 30.0
+                    elif len(token) >= 3 and (token in nw or nw in token):
+                        score += 15.0
+
+            for stem in stems:
+                if stem in name_lower:
+                    score += 10.0
+
+        scored_targets.append((score, name))
+
+    # Sort descending by score, tie-break by name for deterministic order
+    scored_targets.sort(key=lambda x: (-x[0], x[1]))
+    return [name for _, name in scored_targets[:max_limit]]
 
 
 async def async_setup_entry(
@@ -125,10 +191,19 @@ class LayaConversationEntity(ConversationEntity):
         # 1. Discover registered areas and entities
         target_map, area_map = self._build_target_catalog(exposed_domains)
 
-        target_names = list(target_map.keys())
-        if not target_names:
+        if not target_map:
             _LOGGER.warning("Laya: No exposed entities found for domains: %s", exposed_domains)
             return self._build_result(user_input, self._get_text(lang, "not_found"))
+
+        # Intelligent candidate filtering to stay safely under Laya head_max_len=256
+        target_names = self._filter_target_candidates(text, target_map, MAX_TARGET_CANDIDATES)
+        if len(target_map) > MAX_TARGET_CANDIDATES:
+            _LOGGER.debug(
+                "Filtered %d target candidates down to %d for '%s'",
+                len(target_map),
+                len(target_names),
+                text,
+            )
 
         # 2. Build action criteria with clear descriptions for Laya
         action_criteria = {
@@ -256,6 +331,15 @@ class LayaConversationEntity(ConversationEntity):
         )
         return self._build_result(user_input, speech)
 
+    @staticmethod
+    def _filter_target_candidates(
+        text: str,
+        target_map: dict[str, dict[str, Any]],
+        max_limit: int = MAX_TARGET_CANDIDATES,
+    ) -> list[str]:
+        """Intelligently prioritize target candidates to stay safely within Laya head_max_len."""
+        return filter_target_candidates(text, target_map, max_limit)
+
     def _build_target_catalog(
         self, exposed_domains: list[str]
     ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
@@ -275,14 +359,14 @@ class LayaConversationEntity(ConversationEntity):
             area_name_clean = _safe_str(area.name)
             if area_name_clean:
                 area_map[area.id] = area_name_clean
-                target_map[area_name_clean] = {"type": "area", "id": area.id}
+                target_map[area_name_clean] = {"type": "area", "id": area.id, "domain": "area"}
 
             # Also register area aliases if present
             if hasattr(area, "aliases") and area.aliases:
                 for alias in area.aliases:
                     alias_str = _safe_str(alias)
                     if alias_str:
-                        target_map[alias_str] = {"type": "area", "id": area.id}
+                        target_map[alias_str] = {"type": "area", "id": area.id, "domain": "area"}
 
         # 2. Add Entities
         ent_reg = entity_registry.async_get(self.hass)
@@ -295,7 +379,7 @@ class LayaConversationEntity(ConversationEntity):
             friendly_name = state.attributes.get("friendly_name")
             name_to_use = _safe_str(friendly_name) or entity_id
 
-            target_map[name_to_use] = {"type": "entity", "id": entity_id}
+            target_map[name_to_use] = {"type": "entity", "id": entity_id, "domain": domain}
 
             # Check entity registry for extra aliases (safely handles ComputedNameType)
             ent_entry = ent_reg.async_get(entity_id)
@@ -303,7 +387,7 @@ class LayaConversationEntity(ConversationEntity):
                 for alias in ent_entry.aliases:
                     alias_str = _safe_str(alias)
                     if alias_str:
-                        target_map[alias_str] = {"type": "entity", "id": entity_id}
+                        target_map[alias_str] = {"type": "entity", "id": entity_id, "domain": domain}
 
         return target_map, area_map
 

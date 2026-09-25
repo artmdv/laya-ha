@@ -6,6 +6,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 if "homeassistant" not in sys.modules:
     ha_mock = MagicMock()
+
+    class _MockConversationEntity:
+        pass
+
+    ha_mock.ConversationEntity = _MockConversationEntity
+    ha_mock.components.conversation.ConversationEntity = _MockConversationEntity
+
     for mod in [
         "homeassistant",
         "homeassistant.config_entries",

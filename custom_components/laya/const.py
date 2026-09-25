@@ -16,6 +16,9 @@ DEFAULT_TIMEOUT = 3.0
 CONF_CONFIDENCE_THRESHOLD = "confidence_threshold"
 DEFAULT_CONFIDENCE_THRESHOLD = 0.50
 
+# Maximum candidates sent to Laya to stay safely under head_max_len=256
+MAX_TARGET_CANDIDATES = 160
+
 CONF_EXPOSED_DOMAINS = "exposed_domains"
 DEFAULT_EXPOSED_DOMAINS = [
     "light",
