@@ -275,6 +275,14 @@ class LayaConversationEntity(ConversationEntity):
                 target_choice.confidence,
             )
 
+        debug_card_base = (
+            f"Action: {action_choice.choice} (conf: {action_choice.confidence:.2f})\n"
+            f"Target: {target_choice.choice} (conf: {target_choice.confidence:.2f})\n"
+            f"Threshold: {confidence_threshold:.2f}"
+            if debug_logging
+            else None
+        )
+
         # 4. Check confidence guardrail
         if (
             action_choice.confidence < confidence_threshold
@@ -294,7 +302,8 @@ class LayaConversationEntity(ConversationEntity):
                     action_choice.confidence,
                     target_choice.confidence,
                 )
-            return self._build_result(user_input, self._get_text(lang, "low_confidence"))
+            debug_card = f"{debug_card_base}\nStatus: Low confidence rejected" if debug_card_base else None
+            return self._build_result(user_input, self._get_text(lang, "low_confidence"), debug_card=debug_card)
 
         # 5. Resolve chosen action and target
         action_name = action_choice.choice
@@ -302,11 +311,13 @@ class LayaConversationEntity(ConversationEntity):
         action_info = ACTION_DEFINITIONS.get(action_name)
 
         if not action_info:
-            return self._build_result(user_input, self._get_text(lang, "not_found"))
+            debug_card = f"{debug_card_base}\nStatus: Action not defined ({action_name})" if debug_card_base else None
+            return self._build_result(user_input, self._get_text(lang, "not_found"), debug_card=debug_card)
 
         resolved_target = target_map.get(target_name)
         if not resolved_target:
-            return self._build_result(user_input, self._get_text(lang, "not_found"))
+            debug_card = f"{debug_card_base}\nStatus: Target not found in catalog ({target_name})" if debug_card_base else None
+            return self._build_result(user_input, self._get_text(lang, "not_found"), debug_card=debug_card)
 
         # 6. Handle State Queries (temperature, door/gate status, power, etc.)
         if action_name == "query_state":
@@ -314,22 +325,26 @@ class LayaConversationEntity(ConversationEntity):
                 entity_id = resolved_target["id"]
                 state_obj = self.hass.states.get(entity_id)
                 if state_obj is None:
-                    return self._build_result(user_input, self._get_text(lang, "not_found"))
+                    debug_card = f"{debug_card_base}\nTarget ID: {entity_id}\nStatus: State object missing" if debug_card_base else None
+                    return self._build_result(user_input, self._get_text(lang, "not_found"), resolved_target, debug_card=debug_card)
                 speech = self._format_state_query_response(
                     target_name=target_name,
                     state_obj=state_obj,
                     lang=lang,
                 )
-                return self._build_result(user_input, speech)
+                debug_card = f"{debug_card_base}\nTarget ID: {entity_id}\nQuery: {speech}" if debug_card_base else None
+                return self._build_result(user_input, speech, resolved_target, debug_card=debug_card)
             elif resolved_target["type"] == "area":
                 area_id = resolved_target["id"]
                 speech = self._query_area_state(area_id, target_name, lang)
-                return self._build_result(user_input, speech)
+                debug_card = f"{debug_card_base}\nArea ID: {area_id}\nQuery: {speech}" if debug_card_base else None
+                return self._build_result(user_input, speech, resolved_target, debug_card=debug_card)
 
         # 7. Execute service call on entity or entire area
         service_full = action_info.get("service")
         if not service_full:
-            return self._build_result(user_input, self._get_text(lang, "not_found"))
+            debug_card = f"{debug_card_base}\nStatus: Service not mapped for {action_name}" if debug_card_base else None
+            return self._build_result(user_input, self._get_text(lang, "not_found"), resolved_target, debug_card=debug_card)
         service_domain, service_name = service_full.split(".", 1)
 
         try:
@@ -365,7 +380,8 @@ class LayaConversationEntity(ConversationEntity):
                 )
         except Exception as err:
             _LOGGER.error("Failed to execute service %s: %s", service_full, err)
-            return self._build_result(user_input, self._get_text(lang, "error"))
+            debug_card = f"{debug_card_base}\nExecuted: {service_full}\nError: {err}" if debug_card_base else None
+            return self._build_result(user_input, self._get_text(lang, "error"), resolved_target, debug_card=debug_card)
 
         # 8. Format user response
         speech = self._format_speech_response(
@@ -374,7 +390,8 @@ class LayaConversationEntity(ConversationEntity):
             lang=lang,
             style=response_style,
         )
-        return self._build_result(user_input, speech, resolved_target)
+        debug_card = f"{debug_card_base}\nTarget ID: {resolved_target.get('id')}\nExecuted: {service_full}" if debug_card_base else None
+        return self._build_result(user_input, speech, resolved_target, debug_card=debug_card)
 
     async def _async_process_hierarchical(
         self,
@@ -630,18 +647,49 @@ class LayaConversationEntity(ConversationEntity):
         state_dict = LOCALIZED_STATES.get(lang, LOCALIZED_STATES["en"])
         is_word = state_dict.get("is", "is")
 
-        # Search for temperature sensor or climate entity in this area
         ent_reg = entity_registry.async_get(self.hass)
+        dev_reg = device_registry.async_get(self.hass)
+
+        dev_area_map: dict[str, str] = {}
+        if dev_reg and hasattr(dev_reg, "devices"):
+            for dev in dev_reg.devices.values():
+                if getattr(dev, "area_id", None):
+                    dev_area_map[dev.id] = dev.area_id
+
+        # Search for temperature sensor or climate entity in this area
+        found_sensor = None
         for state in self.hass.states.async_all():
-            ent_entry = ent_reg.async_get(state.entity_id)
-            if ent_entry and ent_entry.area_id == area_id:
+            if state.state in (None, "unavailable", "unknown"):
+                continue
+
+            ent_entry = ent_reg.async_get(state.entity_id) if ent_reg else None
+            ent_area_id = None
+            if ent_entry:
+                ent_area_id = getattr(ent_entry, "area_id", None) or (
+                    dev_area_map.get(getattr(ent_entry, "device_id", None))
+                    if getattr(ent_entry, "device_id", None)
+                    else None
+                )
+
+            if ent_area_id == area_id:
                 if state.domain == "climate" and "current_temperature" in state.attributes:
                     temp = state.attributes["current_temperature"]
                     unit = getattr(getattr(self.hass.config, "units", None), "temperature_unit", "°C")
                     return f"{area_name} {is_word} {temp} {unit}"
-                if state.domain == "sensor" and state.attributes.get("device_class") == "temperature":
+                if state.domain == "sensor" and (
+                    state.attributes.get("device_class") == "temperature"
+                    or "temperature" in state.entity_id.lower()
+                    or "temperat" in state.entity_id.lower()
+                    or state.attributes.get("unit_of_measurement") in ("°C", "°F", "K")
+                ):
                     unit = state.attributes.get("unit_of_measurement", "°C")
                     return f"{area_name} {is_word} {state.state} {unit}"
+                if state.domain == "sensor" and not found_sensor:
+                    found_sensor = state
+
+        if found_sensor:
+            unit = found_sensor.attributes.get("unit_of_measurement", "")
+            return f"{area_name} {is_word} {found_sensor.state} {unit}".strip()
 
         return self._get_text(lang, "not_found")
 
@@ -655,10 +703,21 @@ class LayaConversationEntity(ConversationEntity):
         user_input: ConversationInput,
         speech_text: str,
         target_info: dict[str, Any] | None = None,
+        debug_card: str | None = None,
     ) -> ConversationResult:
         """Construct a standardized Home Assistant ConversationResult."""
         intent_response = IntentResponse(language=user_input.language)
         intent_response.async_set_speech(speech_text)
+
+        if debug_card and hasattr(intent_response, "async_set_card"):
+            try:
+                intent_response.async_set_card(
+                    title="Laya Debug",
+                    content=debug_card,
+                )
+            except Exception:
+                pass
+
         if target_info:
             target_id = target_info.get("id")
             if target_id:

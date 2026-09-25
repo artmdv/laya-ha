@@ -61,47 +61,47 @@ DEFAULT_DEBUG_LOGGING = False
 # Standard actions mapped to Home Assistant services and human descriptions
 ACTION_DEFINITIONS = {
     "turn_on": {
-        "description": "Turn on a light, switch, fan, or appliance",
+        "description": "Turn on, activate, switch on a light, switch, fan, or appliance (command to turn on or activate, e.g. įjunk, uždek, paleisk)",
         "service": "homeassistant.turn_on",
     },
     "turn_off": {
-        "description": "Turn off a light, switch, fan, or appliance",
+        "description": "Turn off, deactivate, switch off a light, switch, fan, or appliance (command to turn off or deactivate, e.g. išjunk, užgesink, sustabdyk)",
         "service": "homeassistant.turn_off",
     },
     "toggle": {
-        "description": "Toggle the power state of a light or device",
+        "description": "Toggle the power state of a light or device (command to toggle state, e.g. perjunk)",
         "service": "homeassistant.toggle",
     },
     "open_cover": {
-        "description": "Open a cover, curtain, blind, or garage door",
+        "description": "Open, raise a cover, curtain, blind, gate, barrier, or garage door (command to open, e.g. atidaryk, pakelk, atkėl)",
         "service": "cover.open_cover",
     },
     "close_cover": {
-        "description": "Close a cover, curtain, blind, or garage door",
+        "description": "Close, lower a cover, curtain, blind, gate, barrier, or garage door (command to close, e.g. uždaryk, nuleisk, užverk)",
         "service": "cover.close_cover",
     },
     "start_vacuum": {
-        "description": "Start cleaning with the robot vacuum cleaner",
+        "description": "Start cleaning with the robot vacuum cleaner (command to vacuum, e.g. paleisk siurblį, siurbk)",
         "service": "vacuum.start",
     },
     "stop_vacuum": {
-        "description": "Stop or pause the robot vacuum cleaner",
+        "description": "Stop or pause the robot vacuum cleaner (command to stop vacuum, e.g. sustabdyk siurblį)",
         "service": "vacuum.pause",
     },
     "dock_vacuum": {
-        "description": "Send the robot vacuum cleaner back to its dock or base",
+        "description": "Send the robot vacuum cleaner back to its dock or base (command to return vacuum to dock, e.g. grąžink siurblį į krovimo stotelę)",
         "service": "vacuum.return_to_base",
     },
     "media_play": {
-        "description": "Play or resume media playback",
+        "description": "Play or resume media playback (command to play media, e.g. groti, paleisk muziką)",
         "service": "media_player.media_play",
     },
     "media_pause": {
-        "description": "Pause media playback",
+        "description": "Pause media playback (command to pause media, e.g. pauzė, sustabdyk muziką)",
         "service": "media_player.media_pause",
     },
     "query_state": {
-        "description": "Ask, query, or check the current status, state, temperature, or measurement of a sensor, device, door, or gate",
+        "description": "Ask, query, or check the current status, state, temperature, or whether device is on/off/open/closed (question or inquiry, e.g. ar įjungta, ar išjungta, ar atidaryta, ar uždaryta, kokia temperatūra, koks statusas, būsena)",
         "service": None,
     },
 }
