@@ -74,6 +74,14 @@ class LayaConversationEntity(ConversationEntity):
         self._attr_name = DEFAULT_NAME
         self._attr_unique_id = f"{entry.entry_id}_conversation"
 
+        # Explicitly declare device control support for Home Assistant 2024.8+
+        if hasattr(conversation, "ConversationEntityFeature") and hasattr(
+            conversation.ConversationEntityFeature, "CONTROL"
+        ):
+            self._attr_supported_features = (
+                conversation.ConversationEntityFeature.CONTROL
+            )
+
     @property
     def supported_languages(self) -> list[str] | str:
         """Return supported languages. Laya multilingual checkpoint supports all languages."""

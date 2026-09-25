@@ -34,7 +34,13 @@ from .const import (
     STYLE_VERBOSE,
 )
 
+from homeassistant.helpers import selector
+
 _LOGGER = logging.getLogger(__name__)
+
+OptionsFlowBase = getattr(
+    config_entries, "OptionsFlowWithConfigEntry", config_entries.OptionsFlow
+)
 
 
 class LayaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -105,11 +111,16 @@ class LayaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         return LayaOptionsFlowHandler(config_entry)
 
 
-class LayaOptionsFlowHandler(config_entries.OptionsFlow):
+class LayaOptionsFlowHandler(OptionsFlowBase):
     """Handle options flow for Laya System-1."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow."""
+        if hasattr(super(), "__init__"):
+            try:
+                super().__init__(config_entry)
+            except TypeError:
+                super().__init__()
         self.config_entry = config_entry
 
     async def async_step_init(
@@ -119,7 +130,7 @@ class LayaOptionsFlowHandler(config_entries.OptionsFlow):
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
-        options = self.config_entry.options
+        options = getattr(self, "options", None) or self.config_entry.options
 
         return self.async_show_form(
             step_id="init",
@@ -130,30 +141,59 @@ class LayaOptionsFlowHandler(config_entries.OptionsFlow):
                         default=options.get(
                             CONF_CONFIDENCE_THRESHOLD, DEFAULT_CONFIDENCE_THRESHOLD
                         ),
-                    ): vol.All(vol.Coerce(float), vol.Range(min=0.1, max=1.0)),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0.1,
+                            max=1.0,
+                            step=0.05,
+                            mode=selector.NumberSelectorMode.SLIDER,
+                        )
+                    ),
                     vol.Optional(
                         CONF_EXPOSED_DOMAINS,
                         default=options.get(
                             CONF_EXPOSED_DOMAINS, DEFAULT_EXPOSED_DOMAINS
                         ),
-                    ): cv.multi_select(
-                        {domain: domain for domain in AVAILABLE_DOMAINS}
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=AVAILABLE_DOMAINS,
+                            multiple=True,
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
                     ),
                     vol.Optional(
                         CONF_RESPONSE_STYLE,
                         default=options.get(
                             CONF_RESPONSE_STYLE, DEFAULT_RESPONSE_STYLE
                         ),
-                    ): vol.In(
-                        {
-                            STYLE_CONCISE: "Concise (e.g. 'Turned off' / 'Išjungta')",
-                            STYLE_VERBOSE: "Verbose (e.g. 'Turned off Living Room Light')",
-                        }
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=[
+                                selector.SelectOptionDict(
+                                    value=STYLE_CONCISE,
+                                    label="Concise (e.g. 'Turned off' / 'Išjungta')",
+                                ),
+                                selector.SelectOptionDict(
+                                    value=STYLE_VERBOSE,
+                                    label="Verbose (e.g. 'Turned off Living Room Light')",
+                                ),
+                            ],
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
                     ),
                     vol.Optional(
                         CONF_TIMEOUT,
                         default=options.get(CONF_TIMEOUT, DEFAULT_TIMEOUT),
-                    ): vol.All(vol.Coerce(float), vol.Range(min=0.5, max=15.0)),
+                    ): selector.NumberSelector(
+                        selector.NumberSelectorConfig(
+                            min=0.5,
+                            max=15.0,
+                            step=0.5,
+                            mode=selector.NumberSelectorMode.BOX,
+                            unit_of_measurement="s",
+                        )
+                    ),
                 }
             ),
         )
+
