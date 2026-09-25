@@ -53,7 +53,7 @@ STYLE_VERBOSE = "verbose"
 DEFAULT_RESPONSE_STYLE = STYLE_CONCISE
 
 CONF_HIERARCHICAL_ROUTING = "hierarchical_routing"
-DEFAULT_HIERARCHICAL_ROUTING = False
+DEFAULT_HIERARCHICAL_ROUTING = True
 
 CONF_DEBUG_LOGGING = "debug_logging"
 DEFAULT_DEBUG_LOGGING = False
@@ -61,11 +61,11 @@ DEFAULT_DEBUG_LOGGING = False
 # Standard actions mapped to Home Assistant services and human descriptions
 ACTION_DEFINITIONS = {
     "turn_on": {
-        "description": "Turn on, activate, switch on a light, switch, fan, or appliance (command to turn on or activate, e.g. įjunk, uždek, paleisk)",
+        "description": "Command to turn on, switch on, or activate a light, switch, fan, or device (komanda įjungti, uždegti, paleisti, pvz. 'įjunk šviesą', 'uždek lemputę'). Imperative command, never for questions starting with 'ar'",
         "service": "homeassistant.turn_on",
     },
     "turn_off": {
-        "description": "Turn off, deactivate, switch off a light, switch, fan, or appliance (command to turn off or deactivate, e.g. išjunk, užgesink, sustabdyk)",
+        "description": "Command to turn off, switch off, or deactivate a light, switch, fan, or device (komanda išjungti, užgesinti, sustabdyti, pvz. 'išjunk šviesą', 'užgesink'). Imperative command, never for questions starting with 'ar'",
         "service": "homeassistant.turn_off",
     },
     "toggle": {
@@ -101,7 +101,7 @@ ACTION_DEFINITIONS = {
         "service": "media_player.media_pause",
     },
     "query_state": {
-        "description": "Ask, query, or check the current status, state, temperature, or whether device is on/off/open/closed (question or inquiry, e.g. ar įjungta, ar išjungta, ar atidaryta, ar uždaryta, kokia temperatūra, koks statusas, būsena)",
+        "description": "Question asking whether a device or light is on, off, open, closed, or asking about temperature or measurement (klausimas ar įjungta, ar išjungta, ar atidaryta, ar uždaryta, ar šviesa įjungta, kokia temperatūra, koks statusas). Any question starting with 'ar', 'kokia', 'koks'",
         "service": None,
     },
     "no_action": {

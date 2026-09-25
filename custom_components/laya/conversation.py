@@ -223,9 +223,10 @@ class LayaConversationEntity(ConversationEntity):
         }
 
         # 3. Query Laya System-1 decision engine (Hierarchical 2-step or direct)
+        resolved_area = None
         try:
             if hierarchical_routing and area_map:
-                action_choice, target_choice, target_map = (
+                action_choice, target_choice, target_map, resolved_area = (
                     await self._async_process_hierarchical(
                         text=text,
                         action_criteria=action_criteria,
@@ -258,31 +259,33 @@ class LayaConversationEntity(ConversationEntity):
 
         if debug_logging:
             _LOGGER.warning(
-                "Laya [DEBUG] Evaluated decision for '%s': action='%s' (conf=%.3f), target='%s' (conf=%.3f), threshold=%.2f",
+                "Laya [DEBUG] Evaluated decision for '%s': action='%s' (conf=%.3f), target='%s' (conf=%.3f), area='%s', threshold=%.2f",
                 text,
                 action_choice.choice,
                 action_choice.confidence,
                 target_choice.choice,
                 target_choice.confidence,
+                resolved_area or "none",
                 confidence_threshold,
             )
         else:
             _LOGGER.debug(
-                "Laya decision for '%s': action=%s (conf=%.2f), target=%s (conf=%.2f)",
+                "Laya decision for '%s': action=%s (conf=%.2f), target=%s (conf=%.2f), area=%s",
                 text,
                 action_choice.choice,
                 action_choice.confidence,
                 target_choice.choice,
                 target_choice.confidence,
+                resolved_area or "none",
             )
 
-        debug_card_base = (
-            f"Action: {action_choice.choice} (conf: {action_choice.confidence:.2f})\n"
-            f"Target: {target_choice.choice} (conf: {target_choice.confidence:.2f})\n"
-            f"Threshold: {confidence_threshold:.2f}"
-            if debug_logging
-            else None
-        )
+        debug_lines = []
+        if resolved_area:
+            debug_lines.append(f"Area: {resolved_area}")
+        debug_lines.append(f"Action: {action_choice.choice} (conf: {action_choice.confidence:.2f})")
+        debug_lines.append(f"Target: {target_choice.choice} (conf: {target_choice.confidence:.2f})")
+        debug_lines.append(f"Threshold: {confidence_threshold:.2f}")
+        debug_card_base = "\n".join(debug_lines) if debug_logging else None
 
         # 4. Check confidence guardrail
         if (
@@ -429,22 +432,22 @@ class LayaConversationEntity(ConversationEntity):
         area_map: dict[str, str],
         exposed_domains: list[str],
         confidence_threshold: float,
-    ) -> tuple[DecisionChoice, DecisionChoice, dict[str, dict[str, Any]]]:
+    ) -> tuple[DecisionChoice, DecisionChoice, dict[str, dict[str, Any]], str | None]:
         """Resolve command in 2 steps: identify Area first, then narrow candidates to that Area."""
         name_to_area_id = {clean_name: aid for aid, clean_name in area_map.items()}
 
-        area_choices = {name: f"Room or area: {name}" for name in name_to_area_id}
-        area_choices["none"] = "No specific room or whole-home command"
+        area_choices = {name: f"Room or area: {name} (zona ar kambarys {name})" for name in name_to_area_id}
+        area_choices["none"] = "No specific room or whole-home command (nėra konkretaus kambario ar zonos)"
 
         step1_questions = {
             "action": {
                 "type": "choice",
-                "instructions": "Which smart home action should be performed?",
+                "instructions": "Which smart home action should be performed? (Kuris veiksmas turi būti atliktas?)",
                 "criteria": action_criteria,
             },
             "area": {
                 "type": "choice",
-                "instructions": "Which room or area is mentioned or targeted?",
+                "instructions": "Which room or area is mentioned or targeted? (Kuris kambarys ar zona paminėta komandoje?)",
                 "criteria": area_choices,
             },
         }
@@ -489,7 +492,7 @@ class LayaConversationEntity(ConversationEntity):
                 step2_questions = {
                     "target": {
                         "type": "choice",
-                        "instructions": f"Which specific device or target in {chosen_area_name} is targeted?",
+                        "instructions": f"Which specific device or target in {chosen_area_name} is targeted? (Kuris įrenginys {chosen_area_name} zonoje?)",
                         "criteria": list(area_entities.keys()),
                     }
                 }
@@ -503,7 +506,7 @@ class LayaConversationEntity(ConversationEntity):
                     target_choice.choice,
                     target_choice.confidence,
                 )
-                return action_choice, target_choice, area_entities
+                return action_choice, target_choice, area_entities, chosen_area_name
             elif len(area_entities) == 1:
                 single_target = list(area_entities.keys())[0]
                 return (
@@ -514,6 +517,7 @@ class LayaConversationEntity(ConversationEntity):
                         probabilities={},
                     ),
                     area_entities,
+                    chosen_area_name,
                 )
 
         # Fallback to direct candidate list if area is 'none' or confidence is low
@@ -521,7 +525,7 @@ class LayaConversationEntity(ConversationEntity):
         fallback_questions = {
             "target": {
                 "type": "choice",
-                "instructions": "Which device, room, or entity is targeted?",
+                "instructions": "Which device, room, or entity is targeted? (Kuris įrenginys ar zona?)",
                 "criteria": fallback_targets,
             }
         }
@@ -529,7 +533,7 @@ class LayaConversationEntity(ConversationEntity):
         target_choice = step2_res.get(
             "target", DecisionChoice(choice="", confidence=0.0, probabilities={})
         )
-        return action_choice, target_choice, target_map
+        return action_choice, target_choice, target_map, None
 
     def _get_entities_in_area(
         self, area_id: str, exposed_domains: list[str]

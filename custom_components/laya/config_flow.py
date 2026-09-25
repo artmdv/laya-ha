@@ -90,6 +90,8 @@ class LayaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_EXPOSED_DOMAINS: DEFAULT_EXPOSED_DOMAINS,
                         CONF_RESPONSE_STYLE: DEFAULT_RESPONSE_STYLE,
                         CONF_TIMEOUT: DEFAULT_TIMEOUT,
+                        CONF_HIERARCHICAL_ROUTING: DEFAULT_HIERARCHICAL_ROUTING,
+                        CONF_DEBUG_LOGGING: DEFAULT_DEBUG_LOGGING,
                     },
                 )
 

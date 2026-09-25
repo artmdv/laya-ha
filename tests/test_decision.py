@@ -240,17 +240,20 @@ class TestDecisionLogic(unittest.IsolatedAsyncioTestCase):
             "Svetainės šviesa": {"type": "entity", "id": "light.living_main", "domain": "light"},
         }
 
-        action_choice, target_choice, result_targets = await entity._async_process_hierarchical(
-            text="įjunk šviesą virtuvėj",
-            action_criteria={"turn_on": "Turn on a light"},
-            target_map=target_map,
-            area_map=area_map,
-            exposed_domains=["light"],
-            confidence_threshold=0.50,
+        action_choice, target_choice, result_targets, resolved_area = (
+            await entity._async_process_hierarchical(
+                text="įjunk šviesą virtuvėj",
+                action_criteria={"turn_on": "Turn on a light"},
+                target_map=target_map,
+                area_map=area_map,
+                exposed_domains=["light"],
+                confidence_threshold=0.50,
+            )
         )
 
         self.assertEqual(action_choice.choice, "turn_on")
         self.assertEqual(target_choice.choice, "Virtuvės šviestuvas")
+        self.assertEqual(resolved_area, "Virtuvė")
         self.assertIn("Virtuvės šviestuvas", result_targets)
         self.assertEqual(mock_client.query.call_count, 2)
 
@@ -281,17 +284,20 @@ class TestDecisionLogic(unittest.IsolatedAsyncioTestCase):
             "Virtuvės šviestuvas": {"type": "entity", "id": "light.kitchen_lamp", "domain": "light"},
         }
 
-        action_choice, target_choice, result_targets = await entity._async_process_hierarchical(
-            text="pradėk siurbti",
-            action_criteria={"start_vacuum": "Start vacuum cleaner"},
-            target_map=target_map,
-            area_map=area_map,
-            exposed_domains=["vacuum"],
-            confidence_threshold=0.50,
+        action_choice, target_choice, result_targets, resolved_area = (
+            await entity._async_process_hierarchical(
+                text="pradėk siurbti",
+                action_criteria={"start_vacuum": "Start vacuum cleaner"},
+                target_map=target_map,
+                area_map=area_map,
+                exposed_domains=["vacuum"],
+                confidence_threshold=0.50,
+            )
         )
 
         self.assertEqual(action_choice.choice, "start_vacuum")
         self.assertEqual(target_choice.choice, "Siurblys")
+        self.assertIsNone(resolved_area)
         self.assertEqual(mock_client.query.call_count, 2)
 
 
