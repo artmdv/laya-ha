@@ -18,6 +18,7 @@ from .const import (
     AVAILABLE_DOMAINS,
     CONF_API_KEY,
     CONF_CONFIDENCE_THRESHOLD,
+    CONF_DEBUG_LOGGING,
     CONF_EXPOSED_DOMAINS,
     CONF_HIERARCHICAL_ROUTING,
     CONF_RESPONSE_STYLE,
@@ -25,6 +26,7 @@ from .const import (
     CONF_URL,
     DEFAULT_API_KEY,
     DEFAULT_CONFIDENCE_THRESHOLD,
+    DEFAULT_DEBUG_LOGGING,
     DEFAULT_EXPOSED_DOMAINS,
     DEFAULT_HIERARCHICAL_ROUTING,
     DEFAULT_NAME,
@@ -186,6 +188,12 @@ class LayaOptionsFlowHandler(OptionsFlowBase):
                         CONF_HIERARCHICAL_ROUTING,
                         default=options.get(
                             CONF_HIERARCHICAL_ROUTING, DEFAULT_HIERARCHICAL_ROUTING
+                        ),
+                    ): selector.BooleanSelector(),
+                    vol.Optional(
+                        CONF_DEBUG_LOGGING,
+                        default=options.get(
+                            CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING
                         ),
                     ): selector.BooleanSelector(),
                     vol.Optional(

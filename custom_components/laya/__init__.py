@@ -10,7 +10,14 @@ from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
 from .client import LayaClient
-from .const import CONF_API_KEY, CONF_TIMEOUT, DEFAULT_TIMEOUT, DOMAIN
+from .const import (
+    CONF_API_KEY,
+    CONF_DEBUG_LOGGING,
+    CONF_TIMEOUT,
+    DEFAULT_DEBUG_LOGGING,
+    DEFAULT_TIMEOUT,
+    DOMAIN,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -29,12 +36,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     else:
         timeout = float(timeout_val)
 
+    debug_logging = entry.options.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING)
+
     session = async_get_clientsession(hass)
     client = LayaClient(
         base_url=base_url,
         api_key=api_key,
         timeout=timeout,
         session=session,
+        debug_logging=debug_logging,
     )
 
     hass.data[DOMAIN][entry.entry_id] = {

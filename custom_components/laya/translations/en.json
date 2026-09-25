@@ -24,6 +24,7 @@
           "exposed_domains": "Exposed Domains to Control",
           "response_style": "Voice Confirmation Style",
           "hierarchical_routing": "Two-step Area Routing (Resolve Room First)",
+          "debug_logging": "Debug Mode (Log raw requests & responses to HA log)",
           "timeout": "Inference Timeout (seconds)"
         }
       }

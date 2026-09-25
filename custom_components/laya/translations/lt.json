@@ -24,6 +24,7 @@
           "exposed_domains": "Valdomos įrenginių kategorijos",
           "response_style": "Balso patvirtinimo stilius",
           "hierarchical_routing": "Dviejų žingsnių zonų nukreipimas (Pirma nustatyti kambarį)",
+          "debug_logging": "Derinimo režimas (Registruoti pilnas užklausas ir atsakymus HA žurnale)",
           "timeout": "Užklausos laukimo laikas (sekundėmis)"
         }
       }

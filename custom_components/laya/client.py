@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from dataclasses import dataclass, field
 from typing import Any
@@ -59,6 +60,7 @@ class LayaClient:
         api_key: str | None = None,
         timeout: float = 3.0,
         session: aiohttp.ClientSession | None = None,
+        debug_logging: bool = False,
     ) -> None:
         """Initialize the Laya client."""
         self.base_url = base_url.rstrip("/")
@@ -66,6 +68,7 @@ class LayaClient:
         self.timeout = aiohttp.ClientTimeout(total=timeout)
         self._session = session
         self._own_session = False
+        self.debug_logging = debug_logging
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create an aiohttp ClientSession."""
@@ -126,6 +129,13 @@ class LayaClient:
             "questions": questions,
         }
 
+        if self.debug_logging:
+            _LOGGER.info(
+                "Laya [DEBUG RAW REQUEST] POST %s:\n%s",
+                url,
+                json.dumps(payload, ensure_ascii=False, indent=2),
+            )
+
         try:
             async with session.post(
                 url,
@@ -138,11 +148,24 @@ class LayaClient:
 
                 if response.status != 200:
                     error_text = await response.text()
+                    if self.debug_logging:
+                        _LOGGER.info(
+                            "Laya [DEBUG RAW ERROR RESPONSE] HTTP %d: %s",
+                            response.status,
+                            error_text,
+                        )
                     raise LayaApiError(
                         f"Laya server returned HTTP {response.status}: {error_text}"
                     )
 
                 data = await response.json()
+                if self.debug_logging:
+                    _LOGGER.info(
+                        "Laya [DEBUG RAW RESPONSE] HTTP %d:\n%s",
+                        response.status,
+                        json.dumps(data, ensure_ascii=False, indent=2),
+                    )
+
                 answers = data.get("answers", {})
                 result: dict[str, DecisionChoice] = {}
                 for q_name, q_data in answers.items():

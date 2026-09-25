@@ -32,11 +32,13 @@ from .const import (
     ACTION_DEFINITIONS,
     CONF_API_KEY,
     CONF_CONFIDENCE_THRESHOLD,
+    CONF_DEBUG_LOGGING,
     CONF_EXPOSED_DOMAINS,
     CONF_HIERARCHICAL_ROUTING,
     CONF_RESPONSE_STYLE,
     CONF_TIMEOUT,
     DEFAULT_CONFIDENCE_THRESHOLD,
+    DEFAULT_DEBUG_LOGGING,
     DEFAULT_EXPOSED_DOMAINS,
     DEFAULT_HIERARCHICAL_ROUTING,
     DEFAULT_NAME,
@@ -193,6 +195,8 @@ class LayaConversationEntity(ConversationEntity):
         hierarchical_routing: bool = options.get(
             CONF_HIERARCHICAL_ROUTING, DEFAULT_HIERARCHICAL_ROUTING
         )
+        debug_logging: bool = options.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING)
+        self.client.debug_logging = debug_logging
 
         # 1. Discover registered areas and entities
         target_map, area_map = self._build_target_catalog(exposed_domains)
@@ -251,26 +255,45 @@ class LayaConversationEntity(ConversationEntity):
             _LOGGER.error("Laya execution error: %s", err)
             return self._build_result(user_input, self._get_text(lang, "error"))
 
-        _LOGGER.debug(
-            "Laya decision for '%s': action=%s (conf=%.2f), target=%s (conf=%.2f)",
-            text,
-            action_choice.choice,
-            action_choice.confidence,
-            target_choice.choice,
-            target_choice.confidence,
-        )
+        if debug_logging:
+            _LOGGER.info(
+                "Laya [DEBUG] Evaluated decision for '%s': action='%s' (conf=%.3f), target='%s' (conf=%.3f), threshold=%.2f",
+                text,
+                action_choice.choice,
+                action_choice.confidence,
+                target_choice.choice,
+                target_choice.confidence,
+                confidence_threshold,
+            )
+        else:
+            _LOGGER.debug(
+                "Laya decision for '%s': action=%s (conf=%.2f), target=%s (conf=%.2f)",
+                text,
+                action_choice.choice,
+                action_choice.confidence,
+                target_choice.choice,
+                target_choice.confidence,
+            )
 
         # 4. Check confidence guardrail
         if (
             action_choice.confidence < confidence_threshold
             or target_choice.confidence < confidence_threshold
         ):
-            _LOGGER.info(
-                "Laya decision below confidence threshold (%.2f): action=%.2f, target=%.2f",
-                confidence_threshold,
-                action_choice.confidence,
-                target_choice.confidence,
-            )
+            if debug_logging:
+                _LOGGER.info(
+                    "Laya [DEBUG] Rejected command due to low confidence: action_conf=%.3f, target_conf=%.3f < threshold=%.2f",
+                    action_choice.confidence,
+                    target_choice.confidence,
+                    confidence_threshold,
+                )
+            else:
+                _LOGGER.info(
+                    "Laya decision below confidence threshold (%.2f): action=%.2f, target=%.2f",
+                    confidence_threshold,
+                    action_choice.confidence,
+                    target_choice.confidence,
+                )
             return self._build_result(user_input, self._get_text(lang, "low_confidence"))
 
         # 5. Resolve chosen action and target
