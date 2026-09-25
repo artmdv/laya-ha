@@ -1,8 +1,9 @@
-"""Unit tests for LayaClient."""
-
+import asyncio
 import sys
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import aiohttp
 
 if "homeassistant" not in sys.modules:
     ha_mock = MagicMock()
@@ -188,6 +189,37 @@ class TestLayaClient(unittest.IsolatedAsyncioTestCase):
                 action_criteria=["turn_on"],
                 target_criteria=["Living Room"],
             )
+
+    @patch("aiohttp.ClientSession.post")
+    async def test_decide_timeout_error(self, mock_post):
+        """Test asyncio.TimeoutError is caught and raised as LayaTimeoutError."""
+        mock_post.side_effect = asyncio.TimeoutError()
+
+        with self.assertRaises(LayaTimeoutError):
+            await self.client.decide(
+                command="test command",
+                action_criteria=["turn_on"],
+                target_criteria=["Living Room"],
+            )
+
+    @patch("aiohttp.ClientSession.post")
+    async def test_decide_client_network_error(self, mock_post):
+        """Test generic aiohttp.ClientError is caught and raised as LayaConnectionError."""
+        mock_post.side_effect = aiohttp.ClientError("DNS resolution failed")
+
+        with self.assertRaises(LayaConnectionError):
+            await self.client.decide(
+                command="test command",
+                action_criteria=["turn_on"],
+                target_criteria=["Living Room"],
+            )
+
+    @patch("aiohttp.ClientSession.get")
+    async def test_check_health_timeout(self, mock_get):
+        """Test check_health returns False when request times out."""
+        mock_get.side_effect = asyncio.TimeoutError()
+        result = await self.client.check_health()
+        self.assertFalse(result)
 
 
 if __name__ == "__main__":

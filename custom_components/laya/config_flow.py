@@ -185,8 +185,8 @@ class LayaOptionsFlowHandler(OptionsFlowBase):
                         default=options.get(CONF_TIMEOUT, DEFAULT_TIMEOUT),
                     ): selector.NumberSelector(
                         selector.NumberSelectorConfig(
-                            min=0.5,
-                            max=15.0,
+                            min=1.0,
+                            max=30.0,
                             step=0.5,
                             mode=selector.NumberSelectorMode.BOX,
                             unit_of_measurement="s",

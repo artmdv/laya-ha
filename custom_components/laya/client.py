@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass
 from typing import Any
@@ -98,11 +99,14 @@ class LayaClient:
                     return True
                 _LOGGER.warning("Laya health check returned HTTP %d", response.status)
                 return False
+        except (asyncio.TimeoutError, TimeoutError, aiohttp.ServerTimeoutError):
+            _LOGGER.debug("Laya health check timed out")
+            return False
         except aiohttp.ClientConnectorError as err:
             _LOGGER.debug("Laya health check connector error: %s", err)
             return False
-        except aiohttp.ServerTimeoutError:
-            _LOGGER.debug("Laya health check timed out")
+        except aiohttp.ClientError as err:
+            _LOGGER.debug("Laya health check client error: %s", err)
             return False
         except Exception as err:
             _LOGGER.debug("Laya health check unexpected error: %s", err)
@@ -168,10 +172,18 @@ class LayaClient:
                 data = await response.json()
                 return self._parse_response(data)
 
+        except (asyncio.TimeoutError, TimeoutError, aiohttp.ServerTimeoutError) as err:
+            raise LayaTimeoutError(
+                f"Timed out communicating with Laya server after {self.timeout.total}s"
+            ) from err
         except aiohttp.ClientConnectorError as err:
-            raise LayaConnectionError(f"Failed to connect to Laya server at {self.base_url}: {err}") from err
-        except aiohttp.ServerTimeoutError as err:
-            raise LayaTimeoutError(f"Timed out communicating with Laya server after {self.timeout.total}s") from err
+            raise LayaConnectionError(
+                f"Failed to connect to Laya server at {self.base_url}: {err}"
+            ) from err
+        except aiohttp.ClientError as err:
+            raise LayaConnectionError(
+                f"Network error communicating with Laya server: {err}"
+            ) from err
 
     def _parse_response(self, data: dict[str, Any]) -> LayaDecision:
         """Parse the /v1/systemone JSON response into structured dataclasses."""

@@ -23,7 +23,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     base_url = entry.data[CONF_URL]
     api_key = entry.data.get(CONF_API_KEY)
-    timeout = entry.options.get(CONF_TIMEOUT, DEFAULT_TIMEOUT)
+    timeout_val = entry.options.get(CONF_TIMEOUT)
+    if timeout_val is None or float(timeout_val) < 8.0:
+        timeout = DEFAULT_TIMEOUT
+    else:
+        timeout = float(timeout_val)
 
     session = async_get_clientsession(hass)
     client = LayaClient(
