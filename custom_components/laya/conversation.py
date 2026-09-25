@@ -29,6 +29,7 @@ from .client import (
     LayaTimeoutError,
 )
 from .const import (
+    ACTION_COMPATIBLE_DOMAINS,
     ACTION_DEFINITIONS,
     CONF_API_KEY,
     CONF_CONFIDENCE_THRESHOLD,
@@ -310,14 +311,41 @@ class LayaConversationEntity(ConversationEntity):
         target_name = target_choice.choice
         action_info = ACTION_DEFINITIONS.get(action_name)
 
-        if not action_info:
-            debug_card = f"{debug_card_base}\nStatus: Action not defined ({action_name})" if debug_card_base else None
-            return self._build_result(user_input, self._get_text(lang, "not_found"), debug_card=debug_card)
+        if not action_info or action_name == "no_action":
+            debug_card = f"{debug_card_base}\nStatus: Classified as unhandled / non-action" if debug_card_base else None
+            return self._build_result(user_input, self._get_text(lang, "no_action"), debug_card=debug_card)
 
         resolved_target = target_map.get(target_name)
         if not resolved_target:
             debug_card = f"{debug_card_base}\nStatus: Target not found in catalog ({target_name})" if debug_card_base else None
             return self._build_result(user_input, self._get_text(lang, "not_found"), debug_card=debug_card)
+
+        # Validate domain compatibility (e.g. avoid vacuum.start on a switch entity)
+        compatible_domains = ACTION_COMPATIBLE_DOMAINS.get(action_name)
+        if (
+            compatible_domains is not None
+            and resolved_target.get("type") == "entity"
+            and resolved_target.get("domain") not in compatible_domains
+        ):
+            if debug_logging:
+                _LOGGER.warning(
+                    "Laya [DEBUG] Rejected command due to domain mismatch: action '%s' requires %s, but target '%s' has domain '%s'",
+                    action_name,
+                    compatible_domains,
+                    target_name,
+                    resolved_target.get("domain"),
+                )
+            debug_card = (
+                f"{debug_card_base}\nTarget ID: {resolved_target.get('id')}\nStatus: Domain mismatch (action '{action_name}' incompatible with domain '{resolved_target.get('domain')}')"
+                if debug_card_base
+                else None
+            )
+            return self._build_result(
+                user_input,
+                self._get_text(lang, "low_confidence"),
+                resolved_target,
+                debug_card=debug_card,
+            )
 
         # 6. Handle State Queries (temperature, door/gate status, power, etc.)
         if action_name == "query_state":
@@ -707,7 +735,11 @@ class LayaConversationEntity(ConversationEntity):
     ) -> ConversationResult:
         """Construct a standardized Home Assistant ConversationResult."""
         intent_response = IntentResponse(language=user_input.language)
-        intent_response.async_set_speech(speech_text)
+        if debug_card:
+            speech_with_debug = f"{speech_text}\n\n[Laya Debug]\n{debug_card}"
+            intent_response.async_set_speech(speech_with_debug)
+        else:
+            intent_response.async_set_speech(speech_text)
 
         if debug_card and hasattr(intent_response, "async_set_card"):
             try:

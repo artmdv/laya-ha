@@ -104,6 +104,26 @@ ACTION_DEFINITIONS = {
         "description": "Ask, query, or check the current status, state, temperature, or whether device is on/off/open/closed (question or inquiry, e.g. ar įjungta, ar išjungta, ar atidaryta, ar uždaryta, kokia temperatūra, koks statusas, būsena)",
         "service": None,
     },
+    "no_action": {
+        "description": "None of the above, unhandled command, conversation, test, greeting, or irrelevant text (nieko nedaryti, nesusijęs tekstas, bandymas, pasisveikinimas, neaiški komanda)",
+        "service": None,
+    },
+}
+
+# Domains compatible with specific actions to prevent nonsensical executions
+ACTION_COMPATIBLE_DOMAINS: dict[str, set[str] | None] = {
+    "turn_on": {"light", "switch", "fan", "climate", "media_player", "vacuum", "area"},
+    "turn_off": {"light", "switch", "fan", "climate", "media_player", "vacuum", "area"},
+    "toggle": {"light", "switch", "fan", "area"},
+    "open_cover": {"cover", "area"},
+    "close_cover": {"cover", "area"},
+    "start_vacuum": {"vacuum", "area"},
+    "stop_vacuum": {"vacuum", "area"},
+    "dock_vacuum": {"vacuum", "area"},
+    "media_play": {"media_player", "area"},
+    "media_pause": {"media_player", "area"},
+    "query_state": None,
+    "no_action": None,
 }
 
 LOCALIZED_STATES = {
@@ -154,6 +174,7 @@ LOCALIZED_RESPONSES = {
         "media_pause": "Paused",
         "not_found": "Could not find a matching device",
         "low_confidence": "I'm not sure which device or action you mean",
+        "no_action": "I didn't understand the command",
         "error": "Sorry, an error occurred while executing the command",
         "done": "Done",
     },
@@ -170,6 +191,7 @@ LOCALIZED_RESPONSES = {
         "media_pause": "Pristabdyta",
         "not_found": "Nerasta atitinkamo įrenginio",
         "low_confidence": "Nesu tikras, kurį įrenginį norite valdyti",
+        "no_action": "Nesupratau komandos",
         "error": "Atsiprašau, įvyko ryšio arba vykdymo klaida",
         "done": "Atlikta",
     },
