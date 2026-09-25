@@ -130,7 +130,7 @@ class LayaClient:
         }
 
         if self.debug_logging:
-            _LOGGER.info(
+            _LOGGER.warning(
                 "Laya [DEBUG RAW REQUEST] POST %s:\n%s",
                 url,
                 json.dumps(payload, ensure_ascii=False, indent=2),
@@ -149,7 +149,7 @@ class LayaClient:
                 if response.status != 200:
                     error_text = await response.text()
                     if self.debug_logging:
-                        _LOGGER.info(
+                        _LOGGER.warning(
                             "Laya [DEBUG RAW ERROR RESPONSE] HTTP %d: %s",
                             response.status,
                             error_text,
@@ -160,7 +160,7 @@ class LayaClient:
 
                 data = await response.json()
                 if self.debug_logging:
-                    _LOGGER.info(
+                    _LOGGER.warning(
                         "Laya [DEBUG RAW RESPONSE] HTTP %d:\n%s",
                         response.status,
                         json.dumps(data, ensure_ascii=False, indent=2),

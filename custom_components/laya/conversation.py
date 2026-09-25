@@ -256,7 +256,7 @@ class LayaConversationEntity(ConversationEntity):
             return self._build_result(user_input, self._get_text(lang, "error"))
 
         if debug_logging:
-            _LOGGER.info(
+            _LOGGER.warning(
                 "Laya [DEBUG] Evaluated decision for '%s': action='%s' (conf=%.3f), target='%s' (conf=%.3f), threshold=%.2f",
                 text,
                 action_choice.choice,
@@ -281,7 +281,7 @@ class LayaConversationEntity(ConversationEntity):
             or target_choice.confidence < confidence_threshold
         ):
             if debug_logging:
-                _LOGGER.info(
+                _LOGGER.warning(
                     "Laya [DEBUG] Rejected command due to low confidence: action_conf=%.3f, target_conf=%.3f < threshold=%.2f",
                     action_choice.confidence,
                     target_choice.confidence,
@@ -335,30 +335,32 @@ class LayaConversationEntity(ConversationEntity):
         try:
             if resolved_target["type"] == "area":
                 area_id = resolved_target["id"]
-                _LOGGER.info(
-                    "Executing %s on area '%s' (%s)",
-                    service_full,
-                    target_name,
-                    area_id,
-                )
+                log_msg = f"Executing {service_full} on area '{target_name}' ({area_id})"
+                if debug_logging:
+                    _LOGGER.warning("Laya [DEBUG] %s", log_msg)
+                else:
+                    _LOGGER.info(log_msg)
+
                 await self.hass.services.async_call(
                     service_domain,
                     service_name,
-                    {"area_id": area_id},
+                    service_data={},
+                    target={"area_id": area_id},
                     blocking=True,
                 )
             else:
                 entity_id = resolved_target["id"]
-                _LOGGER.info(
-                    "Executing %s on entity '%s' (%s)",
-                    service_full,
-                    target_name,
-                    entity_id,
-                )
+                log_msg = f"Executing {service_full} on entity '{target_name}' ({entity_id})"
+                if debug_logging:
+                    _LOGGER.warning("Laya [DEBUG] %s", log_msg)
+                else:
+                    _LOGGER.info(log_msg)
+
                 await self.hass.services.async_call(
                     service_domain,
                     service_name,
-                    {"entity_id": entity_id},
+                    service_data={"entity_id": entity_id},
+                    target={"entity_id": entity_id},
                     blocking=True,
                 )
         except Exception as err:
@@ -372,7 +374,7 @@ class LayaConversationEntity(ConversationEntity):
             lang=lang,
             style=response_style,
         )
-        return self._build_result(user_input, speech)
+        return self._build_result(user_input, speech, resolved_target)
 
     async def _async_process_hierarchical(
         self,
@@ -649,11 +651,29 @@ class LayaConversationEntity(ConversationEntity):
         return lang_dict.get(key, LOCALIZED_RESPONSES["en"].get(key, "Done"))
 
     def _build_result(
-        self, user_input: ConversationInput, speech_text: str
+        self,
+        user_input: ConversationInput,
+        speech_text: str,
+        target_info: dict[str, Any] | None = None,
     ) -> ConversationResult:
         """Construct a standardized Home Assistant ConversationResult."""
         intent_response = IntentResponse(language=user_input.language)
         intent_response.async_set_speech(speech_text)
+        if target_info:
+            target_id = target_info.get("id")
+            if target_id:
+                try:
+                    from homeassistant.helpers import intent
+                    t_type = (
+                        intent.IntentResponseTargetType.AREA
+                        if target_info.get("type") == "area"
+                        else intent.IntentResponseTargetType.ENTITY
+                    )
+                    intent_response.async_set_results(
+                        success_results=[intent.IntentResponseTarget(type=t_type, id=target_id)]
+                    )
+                except Exception:
+                    pass
         return ConversationResult(
             response=intent_response,
             conversation_id=user_input.conversation_id,
