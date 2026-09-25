@@ -1,0 +1,11 @@
+{
+  "domain": "laya",
+  "name": "Laya System-1 Conversation",
+  "codeowners": [],
+  "config_flow": true,
+  "documentation": "https://github.com/NandhaKishorM/laya",
+  "integration_type": "service",
+  "iot_class": "local_polling",
+  "version": "1.0.0",
+  "requirements": []
+}

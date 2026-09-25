@@ -1,0 +1,31 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Prisijungti prie Laya System-1",
+        "description": "Įveskite vietinio arba nuotolinio Laya System-1 serverio adresą.",
+        "data": {
+          "url": "Serverio URL",
+          "api_key": "API Raktas (Neprivalomas)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Nepavyko prisijungti prie Laya serverio. Patikrinkite URL ir ar konteineris veikia.",
+      "unknown": "Įvyko netikėta klaida."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Laya System-1 Nustatymai",
+        "data": {
+          "confidence_threshold": "Pasitikėjimo riba (0.10 - 1.00)",
+          "exposed_domains": "Valdomos įrenginių kategorijos",
+          "response_style": "Balso patvirtinimo stilius",
+          "timeout": "Užklausos laukimo laikas (sekundėmis)"
+        }
+      }
+    }
+  }
+}

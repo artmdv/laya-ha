@@ -1,0 +1,31 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Laya System-1",
+        "description": "Enter the URL of your local or remote Laya System-1 inference server.",
+        "data": {
+          "url": "Server URL",
+          "api_key": "API Key (Optional)"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to Laya server. Check URL and ensure the server is running.",
+      "unknown": "An unexpected error occurred."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Laya System-1 Settings",
+        "data": {
+          "confidence_threshold": "Confidence Threshold (0.10 - 1.00)",
+          "exposed_domains": "Exposed Domains to Control",
+          "response_style": "Voice Confirmation Style",
+          "timeout": "Inference Timeout (seconds)"
+        }
+      }
+    }
+  }
+}
