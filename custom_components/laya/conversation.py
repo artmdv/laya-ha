@@ -40,6 +40,7 @@ from .const import (
     DEFAULT_TIMEOUT,
     DOMAIN,
     LOCALIZED_RESPONSES,
+    LOCALIZED_STATES,
     STYLE_VERBOSE,
 )
 
@@ -169,8 +170,28 @@ class LayaConversationEntity(ConversationEntity):
         if not resolved_target:
             return self._build_result(user_input, self._get_text(lang, "not_found"))
 
-        # 6. Execute service call on entity or entire area
-        service_full = action_info["service"]
+        # 6. Handle State Queries (temperature, door/gate status, power, etc.)
+        if action_name == "query_state":
+            if resolved_target["type"] == "entity":
+                entity_id = resolved_target["id"]
+                state_obj = self.hass.states.get(entity_id)
+                if state_obj is None:
+                    return self._build_result(user_input, self._get_text(lang, "not_found"))
+                speech = self._format_state_query_response(
+                    target_name=target_name,
+                    state_obj=state_obj,
+                    lang=lang,
+                )
+                return self._build_result(user_input, speech)
+            elif resolved_target["type"] == "area":
+                area_id = resolved_target["id"]
+                speech = self._query_area_state(area_id, target_name, lang)
+                return self._build_result(user_input, speech)
+
+        # 7. Execute service call on entity or entire area
+        service_full = action_info.get("service")
+        if not service_full:
+            return self._build_result(user_input, self._get_text(lang, "not_found"))
         service_domain, service_name = service_full.split(".", 1)
 
         try:
@@ -206,7 +227,7 @@ class LayaConversationEntity(ConversationEntity):
             _LOGGER.error("Failed to execute service %s: %s", service_full, err)
             return self._build_result(user_input, self._get_text(lang, "error"))
 
-        # 7. Format user response
+        # 8. Format user response
         speech = self._format_speech_response(
             action_name=action_name,
             target_name=target_name,
@@ -266,6 +287,44 @@ class LayaConversationEntity(ConversationEntity):
             return f"{base_action_text} {target_name}"
 
         return base_action_text
+
+    def _format_state_query_response(
+        self, target_name: str, state_obj: Any, lang: str
+    ) -> str:
+        """Format a clear, natural status query answer for sensors and devices."""
+        raw_state = state_obj.state
+        unit = state_obj.attributes.get("unit_of_measurement")
+
+        state_dict = LOCALIZED_STATES.get(lang, LOCALIZED_STATES["en"])
+        is_word = state_dict.get("is", "is")
+
+        # Handle numeric / measurement states (e.g. 21.5 °C, 55%, 150 W)
+        if unit:
+            return f"{target_name} {is_word} {raw_state} {unit}"
+
+        # Handle discrete states (open/closed, on/off, locked/unlocked)
+        translated_state = state_dict.get(raw_state.lower(), raw_state)
+        return f"{target_name} {is_word} {translated_state}"
+
+    def _query_area_state(self, area_id: str, area_name: str, lang: str) -> str:
+        """Find the most relevant sensor (temperature/climate) for an area query."""
+        state_dict = LOCALIZED_STATES.get(lang, LOCALIZED_STATES["en"])
+        is_word = state_dict.get("is", "is")
+
+        # Search for temperature sensor or climate entity in this area
+        ent_reg = entity_registry.async_get(self.hass)
+        for state in self.hass.states.async_all():
+            ent_entry = ent_reg.async_get(state.entity_id)
+            if ent_entry and ent_entry.area_id == area_id:
+                if state.domain == "climate" and "current_temperature" in state.attributes:
+                    temp = state.attributes["current_temperature"]
+                    unit = self.hass.config.units.temperature_unit
+                    return f"{area_name} {is_word} {temp} {unit}"
+                if state.domain == "sensor" and state.attributes.get("device_class") == "temperature":
+                    unit = state.attributes.get("unit_of_measurement", "°C")
+                    return f"{area_name} {is_word} {state.state} {unit}"
+
+        return self._get_text(lang, "not_found")
 
     def _get_text(self, lang: str, key: str) -> str:
         """Get localized phrase with fallback to English."""

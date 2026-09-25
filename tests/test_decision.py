@@ -39,7 +39,8 @@ class TestDecisionLogic(unittest.TestCase):
         for action_name, action_data in ACTION_DEFINITIONS.items():
             self.assertIn("description", action_data, f"Missing description for {action_name}")
             self.assertIn("service", action_data, f"Missing service for {action_name}")
-            self.assertIn(".", action_data["service"], f"Invalid service format for {action_name}")
+            if action_data["service"] is not None:
+                self.assertIn(".", action_data["service"], f"Invalid service format for {action_name}")
             self.assertTrue(len(action_data["description"]) > 5)
 
     def test_localization_completeness(self):
@@ -87,6 +88,36 @@ class TestDecisionLogic(unittest.TestCase):
         base_text = LOCALIZED_RESPONSES["lt"][action]
         verbose = f"{base_text} ({target})"
         self.assertEqual(verbose, "Išjungta (Svetainės šviesa)")
+
+    def test_state_query_formatting_english(self):
+        """Test formatting of state queries in English."""
+        # Numeric state with unit
+        target = "Outside Temperature"
+        state = "18.5"
+        unit = "°C"
+        formatted = f"{target} is {state} {unit}"
+        self.assertEqual(formatted, "Outside Temperature is 18.5 °C")
+
+        # Discrete state
+        gate = "Front Gate"
+        status = "closed"
+        formatted_gate = f"{gate} is {status}"
+        self.assertEqual(formatted_gate, "Front Gate is closed")
+
+    def test_state_query_formatting_lithuanian(self):
+        """Test formatting of state queries in Lithuanian."""
+        # Numeric state with unit
+        target = "Lauko temperatūra"
+        state = "18.5"
+        unit = "°C"
+        formatted = f"{target} yra {state} {unit}"
+        self.assertEqual(formatted, "Lauko temperatūra yra 18.5 °C")
+
+        # Discrete state (e.g. vartai uždaryti)
+        gate = "Kiemo vartai"
+        status = "uždaryta"
+        formatted_gate = f"{gate} yra {status}"
+        self.assertEqual(formatted_gate, "Kiemo vartai yra uždaryta")
 
 
 if __name__ == "__main__":

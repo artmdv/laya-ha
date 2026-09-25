@@ -22,6 +22,8 @@ DEFAULT_EXPOSED_DOMAINS = [
     "switch",
     "vacuum",
     "cover",
+    "sensor",
+    "binary_sensor",
     "media_player",
     "climate",
     "fan",
@@ -32,6 +34,8 @@ AVAILABLE_DOMAINS = [
     "switch",
     "vacuum",
     "cover",
+    "sensor",
+    "binary_sensor",
     "media_player",
     "climate",
     "fan",
@@ -86,6 +90,43 @@ ACTION_DEFINITIONS = {
     "media_pause": {
         "description": "Pause media playback",
         "service": "media_player.media_pause",
+    },
+    "query_state": {
+        "description": "Ask, query, or check the current status, state, temperature, or measurement of a sensor, device, door, or gate",
+        "service": None,
+    },
+}
+
+LOCALIZED_STATES = {
+    "en": {
+        "on": "on",
+        "off": "off",
+        "open": "open",
+        "closed": "closed",
+        "locked": "locked",
+        "unlocked": "unlocked",
+        "cleaning": "cleaning",
+        "docked": "docked",
+        "paused": "paused",
+        "idle": "idle",
+        "unavailable": "unavailable",
+        "unknown": "unknown",
+        "is": "is",
+    },
+    "lt": {
+        "on": "įjungta",
+        "off": "išjungta",
+        "open": "atidaryta",
+        "closed": "uždaryta",
+        "locked": "užrakinta",
+        "unlocked": "atrakinta",
+        "cleaning": "valo",
+        "docked": "kraunasi stotelėje",
+        "paused": "pristabdytas",
+        "idle": "laukia",
+        "unavailable": "nepasiekiamas",
+        "unknown": "nežinoma",
+        "is": "yra",
     },
 }
 

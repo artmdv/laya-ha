@@ -28,6 +28,7 @@ Instead of waiting 400–1200ms for a generative LLM to slowly spit out tokens a
 * **Area-Level and Device-Level Control**: Understands both room-level commands (*"turn off kitchen lights"*) and specific device commands (*"start Roborock"*).
 * **Calibrated Confidence Threshold**: Configurable confidence cutoff (e.g. `0.50`). If an utterance is ambiguous, Laya safely declines rather than triggering an unintended device.
 * **100% Configurable via UI**: Native Config Flow and Options Flow—no YAML configuration required.
+* **Device Control & Status Queries**: Not only controls devices, but also answers status questions (*"What is the temperature outside?"*, *"Is the gate closed?"*, *"Kokia lauko temperatūra?"*, *"Ar vartai uždaryti?"*).
 * **Multilingual Feedback**: Built-in support for English, Lithuanian, and extensible to any language with concise or verbose speech responses.
 
 ---
@@ -118,6 +119,10 @@ Click **Configure** on the integration card to customize:
 Now speak to your voice satellite (e.g. Atom Echo):
 > *"Turn off the living room lights"*  
 > *"Išjunk virtuvės šviesą"*  
+> *"What is the temperature outside?"*  
+> *"Kokia lauko temperatūra?"*  
+> *"Is the front gate closed?"*  
+> *"Ar kiemo vartai uždaryti?"*  
 > *"Start the vacuum"*  
 > *"Paleisk siurblį"*
 
