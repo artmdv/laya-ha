@@ -90,6 +90,15 @@ class LayaConversationEntity(ConversationEntity):
 
     async def async_process(self, user_input: ConversationInput) -> ConversationResult:
         """Process a spoken or written natural language command using Laya."""
+        try:
+            return await self._async_process_internal(user_input)
+        except Exception as err:
+            _LOGGER.exception("Unexpected error during Laya conversation processing: %s", err)
+            lang = (user_input.language or "en").lower().split("-")[0]
+            return self._build_result(user_input, self._get_text(lang, "error"))
+
+    async def _async_process_internal(self, user_input: ConversationInput) -> ConversationResult:
+        """Internal processing pipeline for Laya conversation."""
         text = user_input.text.strip()
         lang = (user_input.language or "en").lower().split("-")[0]
         options = self.entry.options
@@ -245,7 +254,13 @@ class LayaConversationEntity(ConversationEntity):
 
         # 1. Add Areas (Rooms)
         area_reg = area_registry.async_get(self.hass)
-        for area in area_reg.async_list_areas():
+        areas = []
+        if hasattr(area_reg, "areas"):
+            areas = list(area_reg.areas.values())
+        elif hasattr(area_reg, "async_list_areas"):
+            areas = area_reg.async_list_areas()
+
+        for area in areas:
             area_name_clean = area.name.strip()
             area_map[area.id] = area_name_clean
             target_map[area_name_clean] = {"type": "area", "id": area.id}
@@ -318,7 +333,7 @@ class LayaConversationEntity(ConversationEntity):
             if ent_entry and ent_entry.area_id == area_id:
                 if state.domain == "climate" and "current_temperature" in state.attributes:
                     temp = state.attributes["current_temperature"]
-                    unit = self.hass.config.units.temperature_unit
+                    unit = getattr(getattr(self.hass.config, "units", None), "temperature_unit", "°C")
                     return f"{area_name} {is_word} {temp} {unit}"
                 if state.domain == "sensor" and state.attributes.get("device_class") == "temperature":
                     unit = state.attributes.get("unit_of_measurement", "°C")
