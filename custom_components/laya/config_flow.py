@@ -116,12 +116,11 @@ class LayaOptionsFlowHandler(OptionsFlowBase):
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow."""
-        if hasattr(super(), "__init__"):
-            try:
-                super().__init__(config_entry)
-            except TypeError:
-                super().__init__()
-        self.config_entry = config_entry
+        self._config_entry = config_entry
+        try:
+            super().__init__(config_entry)
+        except (TypeError, AttributeError):
+            super().__init__()
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
@@ -130,7 +129,7 @@ class LayaOptionsFlowHandler(OptionsFlowBase):
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
-        options = getattr(self, "options", None) or self.config_entry.options
+        options = getattr(self, "options", None) or self._config_entry.options
 
         return self.async_show_form(
             step_id="init",
