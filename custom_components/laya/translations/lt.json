@@ -23,6 +23,7 @@
           "confidence_threshold": "Pasitikėjimo riba (0.10 - 1.00)",
           "exposed_domains": "Valdomos įrenginių kategorijos",
           "response_style": "Balso patvirtinimo stilius",
+          "hierarchical_routing": "Dviejų žingsnių zonų nukreipimas (Pirma nustatyti kambarį)",
           "timeout": "Užklausos laukimo laikas (sekundėmis)"
         }
       }

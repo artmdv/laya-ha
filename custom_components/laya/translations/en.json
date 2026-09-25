@@ -23,6 +23,7 @@
           "confidence_threshold": "Confidence Threshold (0.10 - 1.00)",
           "exposed_domains": "Exposed Domains to Control",
           "response_style": "Voice Confirmation Style",
+          "hierarchical_routing": "Two-step Area Routing (Resolve Room First)",
           "timeout": "Inference Timeout (seconds)"
         }
       }

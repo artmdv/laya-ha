@@ -221,6 +221,36 @@ class TestLayaClient(unittest.IsolatedAsyncioTestCase):
         result = await self.client.check_health()
         self.assertFalse(result)
 
+    @patch("aiohttp.ClientSession.post")
+    async def test_query_generic_questions(self, mock_post):
+        """Test generic query method returning multiple arbitrary question answers."""
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.json = AsyncMock(
+            return_value={
+                "answers": {
+                    "action": {"choice": "turn_on", "confidence": 0.95},
+                    "area": {"choice": "Kitchen", "confidence": 0.98},
+                }
+            }
+        )
+        mock_resp.__aenter__.return_value = mock_resp
+        mock_post.return_value = mock_resp
+
+        results = await self.client.query(
+            command="turn on kitchen",
+            questions={
+                "action": {"type": "choice", "criteria": ["turn_on"]},
+                "area": {"type": "choice", "criteria": ["Kitchen", "Living Room"]},
+            },
+        )
+
+        self.assertIn("action", results)
+        self.assertIn("area", results)
+        self.assertEqual(results["action"].choice, "turn_on")
+        self.assertEqual(results["area"].choice, "Kitchen")
+        self.assertAlmostEqual(results["area"].confidence, 0.98)
+
 
 if __name__ == "__main__":
     unittest.main()

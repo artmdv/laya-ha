@@ -52,6 +52,9 @@ STYLE_CONCISE = "concise"
 STYLE_VERBOSE = "verbose"
 DEFAULT_RESPONSE_STYLE = STYLE_CONCISE
 
+CONF_HIERARCHICAL_ROUTING = "hierarchical_routing"
+DEFAULT_HIERARCHICAL_ROUTING = False
+
 # Standard actions mapped to Home Assistant services and human descriptions
 ACTION_DEFINITIONS = {
     "turn_on": {

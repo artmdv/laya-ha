@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import aiohttp
@@ -47,7 +47,7 @@ class LayaDecision:
 
     action: DecisionChoice
     target: DecisionChoice
-    raw_response: dict[str, Any]
+    raw_response: dict[str, Any] = field(default_factory=dict)
 
 
 class LayaClient:
@@ -112,45 +112,18 @@ class LayaClient:
             _LOGGER.debug("Laya health check unexpected error: %s", err)
             return False
 
-    async def decide(
+    async def query(
         self,
         command: str,
-        action_criteria: dict[str, str] | list[str],
-        target_criteria: list[str],
-    ) -> LayaDecision:
-        """Send a natural language voice command to Laya for System-1 classification.
-
-        Args:
-            command: The transcribed user sentence (e.g. 'turn off living room light')
-            action_criteria: Available actions (keys or dict of action->description)
-            target_criteria: Available device/area target names
-
-        Returns:
-            LayaDecision with parsed action and target choices
-
-        Raises:
-            LayaConnectionError: Cannot connect to Laya server
-            LayaTimeoutError: Request exceeded timeout
-            LayaAuthError: Authentication failed (401/403)
-            LayaApiError: Server returned 4xx or 5xx error
-        """
+        questions: dict[str, Any],
+    ) -> dict[str, DecisionChoice]:
+        """Send arbitrary questions to Laya for non-autoregressive neural classification."""
         session = await self._get_session()
         url = f"{self.base_url}/v1/systemone"
 
         payload = {
             "state": {"command": command},
-            "questions": {
-                "action": {
-                    "type": "choice",
-                    "instructions": "Which smart home action should be performed?",
-                    "criteria": action_criteria,
-                },
-                "target": {
-                    "type": "choice",
-                    "instructions": "Which device, room, or entity is targeted?",
-                    "criteria": target_criteria,
-                },
-            },
+            "questions": questions,
         }
 
         try:
@@ -170,7 +143,17 @@ class LayaClient:
                     )
 
                 data = await response.json()
-                return self._parse_response(data)
+                answers = data.get("answers", {})
+                result: dict[str, DecisionChoice] = {}
+                for q_name, q_data in answers.items():
+                    result[q_name] = DecisionChoice(
+                        choice=q_data.get("choice", ""),
+                        confidence=float(
+                            q_data.get("answer_confidence", q_data.get("confidence", 0.0))
+                        ),
+                        probabilities=q_data.get("probabilities", {}),
+                    )
+                return result
 
         except (asyncio.TimeoutError, TimeoutError, aiohttp.ServerTimeoutError) as err:
             raise LayaTimeoutError(
@@ -184,6 +167,43 @@ class LayaClient:
             raise LayaConnectionError(
                 f"Network error communicating with Laya server: {err}"
             ) from err
+
+    async def decide(
+        self,
+        command: str,
+        action_criteria: dict[str, str] | list[str],
+        target_criteria: list[str],
+    ) -> LayaDecision:
+        """Send a natural language voice command to Laya for System-1 classification.
+
+        Args:
+            command: The transcribed user sentence (e.g. 'turn off living room light')
+            action_criteria: Available actions (keys or dict of action->description)
+            target_criteria: Available device/area target names
+
+        Returns:
+            LayaDecision with parsed action and target choices
+        """
+        questions = {
+            "action": {
+                "type": "choice",
+                "instructions": "Which smart home action should be performed?",
+                "criteria": action_criteria,
+            },
+            "target": {
+                "type": "choice",
+                "instructions": "Which device, room, or entity is targeted?",
+                "criteria": target_criteria,
+            },
+        }
+        res = await self.query(command, questions)
+        action_choice = res.get(
+            "action", DecisionChoice(choice="", confidence=0.0, probabilities={})
+        )
+        target_choice = res.get(
+            "target", DecisionChoice(choice="", confidence=0.0, probabilities={})
+        )
+        return LayaDecision(action=action_choice, target=target_choice)
 
     def _parse_response(self, data: dict[str, Any]) -> LayaDecision:
         """Parse the /v1/systemone JSON response into structured dataclasses."""

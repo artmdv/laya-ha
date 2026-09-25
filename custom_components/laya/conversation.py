@@ -15,12 +15,13 @@ from homeassistant.components.conversation import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_URL, MATCH_ALL
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import area_registry, entity_registry
+from homeassistant.helpers import area_registry, device_registry, entity_registry
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.intent import IntentResponse
 
 from .client import (
+    DecisionChoice,
     LayaAuthError,
     LayaClient,
     LayaConnectionError,
@@ -32,10 +33,12 @@ from .const import (
     CONF_API_KEY,
     CONF_CONFIDENCE_THRESHOLD,
     CONF_EXPOSED_DOMAINS,
+    CONF_HIERARCHICAL_ROUTING,
     CONF_RESPONSE_STYLE,
     CONF_TIMEOUT,
     DEFAULT_CONFIDENCE_THRESHOLD,
     DEFAULT_EXPOSED_DOMAINS,
+    DEFAULT_HIERARCHICAL_ROUTING,
     DEFAULT_NAME,
     DEFAULT_RESPONSE_STYLE,
     DEFAULT_TIMEOUT,
@@ -187,6 +190,9 @@ class LayaConversationEntity(ConversationEntity):
             CONF_EXPOSED_DOMAINS, DEFAULT_EXPOSED_DOMAINS
         )
         response_style: str = options.get(CONF_RESPONSE_STYLE, DEFAULT_RESPONSE_STYLE)
+        hierarchical_routing: bool = options.get(
+            CONF_HIERARCHICAL_ROUTING, DEFAULT_HIERARCHICAL_ROUTING
+        )
 
         # 1. Discover registered areas and entities
         target_map, area_map = self._build_target_catalog(exposed_domains)
@@ -211,13 +217,27 @@ class LayaConversationEntity(ConversationEntity):
             for action, meta in ACTION_DEFINITIONS.items()
         }
 
-        # 3. Query Laya System-1 decision engine
+        # 3. Query Laya System-1 decision engine (Hierarchical 2-step or direct)
         try:
-            decision = await self.client.decide(
-                command=text,
-                action_criteria=action_criteria,
-                target_criteria=target_names,
-            )
+            if hierarchical_routing and area_map:
+                action_choice, target_choice, target_map = (
+                    await self._async_process_hierarchical(
+                        text=text,
+                        action_criteria=action_criteria,
+                        target_map=target_map,
+                        area_map=area_map,
+                        exposed_domains=exposed_domains,
+                        confidence_threshold=confidence_threshold,
+                    )
+                )
+            else:
+                decision = await self.client.decide(
+                    command=text,
+                    action_criteria=action_criteria,
+                    target_criteria=target_names,
+                )
+                action_choice = decision.action
+                target_choice = decision.target
         except LayaConnectionError as err:
             _LOGGER.error("Laya connection failed: %s", err)
             return self._build_result(user_input, self._get_text(lang, "error"))
@@ -234,28 +254,28 @@ class LayaConversationEntity(ConversationEntity):
         _LOGGER.debug(
             "Laya decision for '%s': action=%s (conf=%.2f), target=%s (conf=%.2f)",
             text,
-            decision.action.choice,
-            decision.action.confidence,
-            decision.target.choice,
-            decision.target.confidence,
+            action_choice.choice,
+            action_choice.confidence,
+            target_choice.choice,
+            target_choice.confidence,
         )
 
         # 4. Check confidence guardrail
         if (
-            decision.action.confidence < confidence_threshold
-            or decision.target.confidence < confidence_threshold
+            action_choice.confidence < confidence_threshold
+            or target_choice.confidence < confidence_threshold
         ):
             _LOGGER.info(
                 "Laya decision below confidence threshold (%.2f): action=%.2f, target=%.2f",
                 confidence_threshold,
-                decision.action.confidence,
-                decision.target.confidence,
+                action_choice.confidence,
+                target_choice.confidence,
             )
             return self._build_result(user_input, self._get_text(lang, "low_confidence"))
 
         # 5. Resolve chosen action and target
-        action_name = decision.action.choice
-        target_name = decision.target.choice
+        action_name = action_choice.choice
+        target_name = target_choice.choice
         action_info = ACTION_DEFINITIONS.get(action_name)
 
         if not action_info:
@@ -330,6 +350,164 @@ class LayaConversationEntity(ConversationEntity):
             style=response_style,
         )
         return self._build_result(user_input, speech)
+
+    async def _async_process_hierarchical(
+        self,
+        text: str,
+        action_criteria: dict[str, str],
+        target_map: dict[str, dict[str, Any]],
+        area_map: dict[str, str],
+        exposed_domains: list[str],
+        confidence_threshold: float,
+    ) -> tuple[DecisionChoice, DecisionChoice, dict[str, dict[str, Any]]]:
+        """Resolve command in 2 steps: identify Area first, then narrow candidates to that Area."""
+        name_to_area_id = {clean_name: aid for aid, clean_name in area_map.items()}
+
+        area_choices = {name: f"Room or area: {name}" for name in name_to_area_id}
+        area_choices["none"] = "No specific room or whole-home command"
+
+        step1_questions = {
+            "action": {
+                "type": "choice",
+                "instructions": "Which smart home action should be performed?",
+                "criteria": action_criteria,
+            },
+            "area": {
+                "type": "choice",
+                "instructions": "Which room or area is mentioned or targeted?",
+                "criteria": area_choices,
+            },
+        }
+
+        step1_res = await self.client.query(text, step1_questions)
+        action_choice = step1_res.get(
+            "action", DecisionChoice(choice="", confidence=0.0, probabilities={})
+        )
+        area_choice = step1_res.get(
+            "area", DecisionChoice(choice="", confidence=0.0, probabilities={})
+        )
+
+        _LOGGER.debug(
+            "Hierarchical Step 1: action=%s (conf=%.2f), area=%s (conf=%.2f)",
+            action_choice.choice,
+            action_choice.confidence,
+            area_choice.choice,
+            area_choice.confidence,
+        )
+
+        # Check if an area was identified with reasonable confidence
+        if (
+            area_choice.choice
+            and area_choice.choice != "none"
+            and area_choice.choice in name_to_area_id
+            and area_choice.confidence >= confidence_threshold
+        ):
+            chosen_area_name = area_choice.choice
+            chosen_area_id = name_to_area_id[chosen_area_name]
+
+            # Gather entities in this area
+            area_entities = self._get_entities_in_area(chosen_area_id, exposed_domains)
+            # Include the area itself as a target (e.g. for whole-room actions like 'turn off kitchen')
+            area_entities[chosen_area_name] = {
+                "type": "area",
+                "id": chosen_area_id,
+                "domain": "area",
+            }
+
+            if len(area_entities) > 1:
+                # Step 2: query Laya with only this area's targets
+                step2_questions = {
+                    "target": {
+                        "type": "choice",
+                        "instructions": f"Which specific device or target in {chosen_area_name} is targeted?",
+                        "criteria": list(area_entities.keys()),
+                    }
+                }
+                step2_res = await self.client.query(text, step2_questions)
+                target_choice = step2_res.get(
+                    "target", DecisionChoice(choice="", confidence=0.0, probabilities={})
+                )
+                _LOGGER.debug(
+                    "Hierarchical Step 2 in '%s': target=%s (conf=%.2f)",
+                    chosen_area_name,
+                    target_choice.choice,
+                    target_choice.confidence,
+                )
+                return action_choice, target_choice, area_entities
+            elif len(area_entities) == 1:
+                single_target = list(area_entities.keys())[0]
+                return (
+                    action_choice,
+                    DecisionChoice(
+                        choice=single_target,
+                        confidence=area_choice.confidence,
+                        probabilities={},
+                    ),
+                    area_entities,
+                )
+
+        # Fallback to direct candidate list if area is 'none' or confidence is low
+        fallback_targets = self._filter_target_candidates(text, target_map, MAX_TARGET_CANDIDATES)
+        fallback_questions = {
+            "target": {
+                "type": "choice",
+                "instructions": "Which device, room, or entity is targeted?",
+                "criteria": fallback_targets,
+            }
+        }
+        step2_res = await self.client.query(text, fallback_questions)
+        target_choice = step2_res.get(
+            "target", DecisionChoice(choice="", confidence=0.0, probabilities={})
+        )
+        return action_choice, target_choice, target_map
+
+    def _get_entities_in_area(
+        self, area_id: str, exposed_domains: list[str]
+    ) -> dict[str, dict[str, Any]]:
+        """Return all exposed entities belonging to a specific area."""
+        ent_reg = entity_registry.async_get(self.hass)
+        dev_reg = device_registry.async_get(self.hass)
+
+        dev_area_map: dict[str, str] = {}
+        if dev_reg and hasattr(dev_reg, "devices"):
+            for dev in dev_reg.devices.values():
+                if getattr(dev, "area_id", None):
+                    dev_area_map[dev.id] = dev.area_id
+
+        area_entities: dict[str, dict[str, Any]] = {}
+
+        for state in self.hass.states.async_all():
+            if state.domain not in exposed_domains:
+                continue
+
+            ent_entry = ent_reg.async_get(state.entity_id) if ent_reg else None
+            ent_area_id = None
+            if ent_entry:
+                ent_area_id = getattr(ent_entry, "area_id", None) or (
+                    dev_area_map.get(getattr(ent_entry, "device_id", None))
+                    if getattr(ent_entry, "device_id", None)
+                    else None
+                )
+
+            if ent_area_id == area_id:
+                friendly_name = state.attributes.get("friendly_name")
+                name_to_use = _safe_str(friendly_name) or state.entity_id
+                area_entities[name_to_use] = {
+                    "type": "entity",
+                    "id": state.entity_id,
+                    "domain": state.domain,
+                }
+                if ent_entry and hasattr(ent_entry, "aliases") and ent_entry.aliases:
+                    for alias in ent_entry.aliases:
+                        alias_str = _safe_str(alias)
+                        if alias_str:
+                            area_entities[alias_str] = {
+                                "type": "entity",
+                                "id": state.entity_id,
+                                "domain": state.domain,
+                            }
+
+        return area_entities
 
     @staticmethod
     def _filter_target_candidates(

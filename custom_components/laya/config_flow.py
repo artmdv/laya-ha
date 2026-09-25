@@ -19,12 +19,14 @@ from .const import (
     CONF_API_KEY,
     CONF_CONFIDENCE_THRESHOLD,
     CONF_EXPOSED_DOMAINS,
+    CONF_HIERARCHICAL_ROUTING,
     CONF_RESPONSE_STYLE,
     CONF_TIMEOUT,
     CONF_URL,
     DEFAULT_API_KEY,
     DEFAULT_CONFIDENCE_THRESHOLD,
     DEFAULT_EXPOSED_DOMAINS,
+    DEFAULT_HIERARCHICAL_ROUTING,
     DEFAULT_NAME,
     DEFAULT_RESPONSE_STYLE,
     DEFAULT_TIMEOUT,
@@ -180,6 +182,12 @@ class LayaOptionsFlowHandler(OptionsFlowBase):
                             mode=selector.SelectSelectorMode.DROPDOWN,
                         )
                     ),
+                    vol.Optional(
+                        CONF_HIERARCHICAL_ROUTING,
+                        default=options.get(
+                            CONF_HIERARCHICAL_ROUTING, DEFAULT_HIERARCHICAL_ROUTING
+                        ),
+                    ): selector.BooleanSelector(),
                     vol.Optional(
                         CONF_TIMEOUT,
                         default=options.get(CONF_TIMEOUT, DEFAULT_TIMEOUT),

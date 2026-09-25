@@ -2,7 +2,7 @@
 
 import sys
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 if "homeassistant" not in sys.modules:
     ha_mock = MagicMock()
@@ -29,6 +29,7 @@ if "homeassistant" not in sys.modules:
     ]:
         sys.modules[mod] = ha_mock
 
+from custom_components.laya.client import DecisionChoice
 from custom_components.laya.const import (
     ACTION_DEFINITIONS,
     DEFAULT_EXPOSED_DOMAINS,
@@ -40,7 +41,7 @@ from custom_components.laya.const import (
 from custom_components.laya.conversation import LayaConversationEntity
 
 
-class TestDecisionLogic(unittest.TestCase):
+class TestDecisionLogic(unittest.IsolatedAsyncioTestCase):
     """Test suite for action mappings, localization, and target resolution."""
 
     def test_all_actions_have_descriptions_and_services(self):
@@ -202,6 +203,96 @@ class TestDecisionLogic(unittest.TestCase):
 
         self.assertEqual(len(filtered), 10)
         self.assertEqual(filtered[0], "Lauko temperatūra")
+
+    async def test_hierarchical_routing_identifies_room_and_device(self):
+        """Test two-step hierarchical routing resolves area first, then device within that area."""
+        mock_client = MagicMock()
+        # Step 1 response: action=turn_on, area=Virtuvė
+        step1_result = {
+            "action": DecisionChoice(choice="turn_on", confidence=0.95, probabilities={}),
+            "area": DecisionChoice(choice="Virtuvė", confidence=0.98, probabilities={}),
+        }
+        # Step 2 response: target=Virtuvės šviestuvas
+        step2_result = {
+            "target": DecisionChoice(choice="Virtuvės šviestuvas", confidence=0.96, probabilities={}),
+        }
+
+        mock_client.query = AsyncMock(side_effect=[step1_result, step2_result])
+
+        entity = LayaConversationEntity(
+            hass=MagicMock(),
+            entry=MagicMock(),
+            client=mock_client,
+        )
+
+        # Mock _get_entities_in_area to return kitchen devices
+        entity._get_entities_in_area = MagicMock(
+            return_value={
+                "Virtuvės šviestuvas": {"type": "entity", "id": "light.kitchen_lamp", "domain": "light"},
+                "Virtuvės stalviršio LED": {"type": "entity", "id": "light.kitchen_led", "domain": "light"},
+            }
+        )
+
+        area_map = {"kitchen_id": "Virtuvė", "living_id": "Svetainė"}
+        target_map = {
+            "Virtuvės šviestuvas": {"type": "entity", "id": "light.kitchen_lamp", "domain": "light"},
+            "Virtuvės stalviršio LED": {"type": "entity", "id": "light.kitchen_led", "domain": "light"},
+            "Svetainės šviesa": {"type": "entity", "id": "light.living_main", "domain": "light"},
+        }
+
+        action_choice, target_choice, result_targets = await entity._async_process_hierarchical(
+            text="įjunk šviesą virtuvėj",
+            action_criteria={"turn_on": "Turn on a light"},
+            target_map=target_map,
+            area_map=area_map,
+            exposed_domains=["light"],
+            confidence_threshold=0.50,
+        )
+
+        self.assertEqual(action_choice.choice, "turn_on")
+        self.assertEqual(target_choice.choice, "Virtuvės šviestuvas")
+        self.assertIn("Virtuvės šviestuvas", result_targets)
+        self.assertEqual(mock_client.query.call_count, 2)
+
+    async def test_hierarchical_routing_fallback_when_no_area(self):
+        """When no area is detected, hierarchical routing falls back to global targets seamlessly."""
+        mock_client = MagicMock()
+        # Step 1: action=start_vacuum, area=none
+        step1_result = {
+            "action": DecisionChoice(choice="start_vacuum", confidence=0.92, probabilities={}),
+            "area": DecisionChoice(choice="none", confidence=0.90, probabilities={}),
+        }
+        # Fallback Step 2: target=Siurblys
+        step2_result = {
+            "target": DecisionChoice(choice="Siurblys", confidence=0.94, probabilities={}),
+        }
+
+        mock_client.query = AsyncMock(side_effect=[step1_result, step2_result])
+
+        entity = LayaConversationEntity(
+            hass=MagicMock(),
+            entry=MagicMock(),
+            client=mock_client,
+        )
+
+        area_map = {"kitchen_id": "Virtuvė"}
+        target_map = {
+            "Siurblys": {"type": "entity", "id": "vacuum.roborock", "domain": "vacuum"},
+            "Virtuvės šviestuvas": {"type": "entity", "id": "light.kitchen_lamp", "domain": "light"},
+        }
+
+        action_choice, target_choice, result_targets = await entity._async_process_hierarchical(
+            text="pradėk siurbti",
+            action_criteria={"start_vacuum": "Start vacuum cleaner"},
+            target_map=target_map,
+            area_map=area_map,
+            exposed_domains=["vacuum"],
+            confidence_threshold=0.50,
+        )
+
+        self.assertEqual(action_choice.choice, "start_vacuum")
+        self.assertEqual(target_choice.choice, "Siurblys")
+        self.assertEqual(mock_client.query.call_count, 2)
 
 
 if __name__ == "__main__":
