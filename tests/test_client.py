@@ -37,7 +37,7 @@ class TestLayaClient(unittest.IsolatedAsyncioTestCase):
     """Test suite for LayaClient communication and parsing."""
 
     def setUp(self):
-        self.base_url = "http://192.168.0.159:12003"
+        self.base_url = "http://localhost:8000"
         self.client = LayaClient(base_url=self.base_url, timeout=2.0)
 
     async def asyncTearDown(self):

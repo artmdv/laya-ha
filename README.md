@@ -92,7 +92,7 @@ curl http://<YOUR_SERVER_IP>:12003/health
 
 1. In Home Assistant, navigate to **Settings** $\rightarrow$ **Devices & Services**.
 2. Click **+ Add Integration** $\rightarrow$ Search for **Laya System-1**.
-3. Enter your Laya server URL (e.g. `http://192.168.0.159:12003`).
+3. Enter your Laya server URL (e.g. `http://homeassistant.local:12003` or `http://192.168.1.100:12003`).
 4. *(Optional)* Enter an API key if you enabled authentication.
 5. Click **Submit**.
 
