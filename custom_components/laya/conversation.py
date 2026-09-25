@@ -31,6 +31,7 @@ from .client import (
 from .const import (
     ACTION_COMPATIBLE_DOMAINS,
     ACTION_DEFINITIONS,
+    AREA_SYNONYMS,
     CONF_API_KEY,
     CONF_CONFIDENCE_THRESHOLD,
     CONF_DEBUG_LOGGING,
@@ -408,15 +409,45 @@ class LayaConversationEntity(ConversationEntity):
         try:
             if resolved_target["type"] == "area":
                 area_id = resolved_target["id"]
-                log_msg = f"Executing {service_full} on area '{target_name}' ({area_id})"
+                # Determine safe target domain for area command to prevent turning on appliances/dishwashers
+                target_domain = "light"  # Default safe domain for room commands
+                text_lower = text.lower()
+                if any(w in text_lower for w in ("fan", "ventiliat", "vėdinim")):
+                    target_domain = "fan"
+                elif any(w in text_lower for w in ("cover", "užuolaid", "rolet", "žaliuz", "blind", "curtain", "shutter")):
+                    target_domain = "cover"
+                elif any(w in text_lower for w in ("switch", "socket", "rozet", "kištuk", "plug")):
+                    target_domain = "switch"
+                elif any(w in text_lower for w in ("vacuum", "siurbl")):
+                    target_domain = "vacuum"
+                elif any(w in text_lower for w in ("media", "muzik", "grotuv", "televizor", "tv", "player")):
+                    target_domain = "media_player"
+
+                if service_domain == "homeassistant":
+                    target_service = f"{target_domain}.{service_name}"
+                else:
+                    target_service = service_full
+
+                srv_domain, srv_name = target_service.split(".", 1)
+                if (
+                    hasattr(self.hass, "services")
+                    and hasattr(self.hass.services, "has_service")
+                    and not self.hass.services.has_service(srv_domain, srv_name)
+                ):
+                    if self.hass.services.has_service("light", service_name):
+                        srv_domain, srv_name = "light", service_name
+                    else:
+                        srv_domain, srv_name = service_domain, service_name
+
+                log_msg = f"Executing {srv_domain}.{srv_name} on area '{target_name}' ({area_id})"
                 if debug_logging:
                     _LOGGER.warning("Laya [DEBUG] %s", log_msg)
                 else:
                     _LOGGER.info(log_msg)
 
                 await self.hass.services.async_call(
-                    service_domain,
-                    service_name,
+                    srv_domain,
+                    srv_name,
                     service_data={},
                     target={"area_id": area_id},
                     blocking=True,
@@ -440,6 +471,13 @@ class LayaConversationEntity(ConversationEntity):
             _LOGGER.error("Failed to execute service %s: %s", service_full, err)
             debug_card = f"{debug_card_base}\nExecuted: {service_full}\nError: {err}" if debug_card_base else None
             return self._build_result(user_input, self._get_text(lang, "error"), resolved_target, debug_card=debug_card)
+
+        # Append execution summary to debug card if present
+        if debug_card_base:
+            executed_srv = f"{srv_domain}.{srv_name}" if resolved_target["type"] == "area" else service_full
+            debug_card = f"{debug_card_base}\nTarget ID: {resolved_target.get('id')}\nExecuted: {executed_srv}"
+        else:
+            debug_card = None
 
         # 8. Format user response
         speech = self._format_speech_response(
@@ -505,6 +543,17 @@ class LayaConversationEntity(ConversationEntity):
                 direct_matched_area = clean_name
                 break
 
+            # Multilingual synonym match (e.g. English area 'Kitchen' matched from Lithuanian 'virtuvėj')
+            matched_synonym = False
+            for syn_key, syn_list in AREA_SYNONYMS.items():
+                if syn_key in c_lower or any(s in c_lower for s in syn_list if len(s) >= 4):
+                    if any(syn in text_lower for syn in syn_list):
+                        direct_matched_area = clean_name
+                        matched_synonym = True
+                        break
+            if matched_synonym:
+                break
+
         chosen_area_name = None
         if direct_matched_area:
             chosen_area_name = direct_matched_area
@@ -527,6 +576,17 @@ class LayaConversationEntity(ConversationEntity):
                 "id": chosen_area_id,
                 "domain": "area",
             }
+            # Also register multilingual aliases of this room so Laya matches them naturally
+            for syn_key, syn_list in AREA_SYNONYMS.items():
+                if syn_key in chosen_area_name.lower() or any(s in chosen_area_name.lower() for s in syn_list if len(s) >= 4):
+                    for syn in syn_list:
+                        if syn in text_lower and syn not in area_entities:
+                            area_entities[syn] = {
+                                "type": "area",
+                                "id": chosen_area_id,
+                                "domain": "area",
+                            }
+                            break
 
             if len(area_entities) > 1:
                 # Step 2: query Laya with only this area's targets

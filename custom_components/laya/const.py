@@ -58,6 +58,63 @@ DEFAULT_HIERARCHICAL_ROUTING = True
 CONF_DEBUG_LOGGING = "debug_logging"
 DEFAULT_DEBUG_LOGGING = False
 
+# Multilingual area synonyms and stems to map spoken rooms to configured area names
+AREA_SYNONYMS: dict[str, list[str]] = {
+    "kitchen": [
+        "virtuv", "virtuve", "virtuvė", "virtuvės", "virtuvėj", "virtuveje", "virtuvėje",
+        "kuchnia", "küche", "cuisine", "cocina",
+    ],
+    "living_room": [
+        "svetain", "svetainė", "svetainės", "svetainėj", "svetaineje", "svetainėje",
+        "salonas", "salono", "salone", "saloną",
+        "salon", "living", "pokój dzienny", "wohnzimmer",
+    ],
+    "bedroom": [
+        "miegam", "miegamasis", "miegamojo", "miegamajame",
+        "sypialnia", "schlafzimmer", "dormitorio", "chambre",
+    ],
+    "bathroom": [
+        "voni", "vonia", "vonios", "vonioje", "vonion", "tualet", "tualetas", "tualete", "wc",
+        "łazienka", "bad", "badezimmer", "baño", "salle de bain",
+    ],
+    "corridor": [
+        "koridor", "koridorius", "koridoriuje", "koridoriuj",
+        "prieškambar", "prieškambaris", "prieškambaryje", "hol", "holas", "hole",
+        "hallway", "corridor", "flur", "przedpokój",
+    ],
+    "hallway": [
+        "koridor", "koridorius", "koridoriuje", "koridoriuj",
+        "prieškambar", "prieškambaris", "prieškambaryje", "hol", "holas", "hole",
+        "hallway", "corridor", "flur", "przedpokój",
+    ],
+    "office": [
+        "darbo", "darbo kambarys", "kabinet", "kabinetas", "kabinete",
+        "biuras", "biure", "office", "study", "büro", "gabinet",
+    ],
+    "kids_room": [
+        "vaik", "vaikų", "vaiku", "vaiko", "vaikų kambarys", "vaikų kambaryje",
+        "children", "kids", "pokój dziecięcy", "kinderzimmer",
+    ],
+    "outdoor": [
+        "lauk", "laukas", "lauko", "lauke",
+        "kiem", "kiemas", "kiemo", "kieme",
+        "sod", "sodas", "sodo", "sode",
+        "yard", "garden", "outdoor", "outside", "ogród", "garten",
+    ],
+    "garage": [
+        "garaž", "garažas", "garažo", "garaže", "garaz", "garage",
+    ],
+    "balcony": [
+        "balkon", "balkonas", "balkono", "balkone", "balcony",
+    ],
+    "terrace": [
+        "teras", "terasa", "terasos", "terasoje", "terrace",
+    ],
+    "basement": [
+        "rūs", "rūsys", "rūsio", "rūsyje", "basement", "cellar", "piwnica", "keller",
+    ],
+}
+
 # Standard actions mapped to Home Assistant services and human descriptions
 ACTION_DEFINITIONS = {
     "turn_on": {

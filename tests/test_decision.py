@@ -404,6 +404,96 @@ class TestDecisionLogic(unittest.IsolatedAsyncioTestCase):
             # It must NOT execute turn_on, but rather query the state
             mock_hass.services.async_call.assert_not_called()
 
+    async def test_area_service_call_targets_light_domain_never_homeassistant(self):
+        """Verify area turn_on executes light.turn_on, preventing turning on appliances like dishwashers."""
+        mock_client = MagicMock()
+        decision_mock = MagicMock()
+        decision_mock.action = DecisionChoice(choice="turn_on", confidence=0.95, probabilities={})
+        decision_mock.target = DecisionChoice(choice="Kitchen", confidence=0.98, probabilities={})
+        mock_client.decide = AsyncMock(return_value=decision_mock)
+
+        mock_hass = MagicMock()
+        mock_hass.services.has_service.return_value = True
+        mock_hass.services.async_call = AsyncMock()
+
+        entity = LayaConversationEntity(
+            hass=mock_hass,
+            entry=MagicMock(),
+            client=mock_client,
+        )
+
+        user_input = MagicMock()
+        user_input.text = "turn on kitchen light"
+        user_input.language = "en"
+        user_input.conversation_id = "test_conv"
+
+        with unittest.mock.patch.object(entity, "_build_target_catalog") as mock_cat:
+            mock_cat.return_value = (
+                {"Kitchen": {"type": "area", "id": "kitchen", "domain": "area"}},
+                {"kitchen": "Kitchen"},
+            )
+            entity.entry.options = {"hierarchical_routing": False}
+            res = await entity._async_process_internal(user_input)
+
+            # Crucial assertion: Must call light.turn_on, NEVER homeassistant.turn_on!
+            mock_hass.services.async_call.assert_called_once_with(
+                "light",
+                "turn_on",
+                service_data={},
+                target={"area_id": "kitchen"},
+                blocking=True,
+            )
+
+    async def test_area_synonym_matching_english_area_lithuanian_utterance(self):
+        """Verify English area 'Kitchen' is matched when user speaks Lithuanian 'virtuvėj'."""
+        mock_client = MagicMock()
+        mock_client.query = AsyncMock(
+            side_effect=[
+                {
+                    "action": DecisionChoice(choice="turn_on", confidence=0.95, probabilities={}),
+                    "area": DecisionChoice(choice="none", confidence=0.10, probabilities={}),
+                },
+                {
+                    "target": DecisionChoice(choice="Virtuvės šviesa", confidence=0.92, probabilities={}),
+                },
+            ]
+        )
+
+        mock_hass = MagicMock()
+        entity = LayaConversationEntity(
+            hass=mock_hass,
+            entry=MagicMock(),
+            client=mock_client,
+        )
+
+        area_map = {"kitchen": "Kitchen"}
+        target_map = {
+            "Kitchen": {"type": "area", "id": "kitchen", "domain": "area"},
+            "Virtuvės šviesa": {"type": "entity", "id": "light.kitchen", "domain": "light", "area_id": "kitchen"},
+        }
+
+        with unittest.mock.patch.object(
+            entity,
+            "_get_entities_in_area",
+            return_value={
+                "Virtuvės šviesa": {"type": "entity", "id": "light.kitchen", "domain": "light"},
+            },
+        ):
+            action_choice, target_choice, result_targets, resolved_area = (
+                await entity._async_process_hierarchical(
+                    text="įjunk šviesą virtuvėj",
+                    action_criteria={"turn_on": "Turn on"},
+                    target_map=target_map,
+                    area_map=area_map,
+                    exposed_domains=["light"],
+                    confidence_threshold=0.50,
+                )
+            )
+
+        self.assertEqual(resolved_area, "Kitchen")
+        self.assertEqual(target_choice.choice, "Virtuvės šviesa")
+        self.assertIn("Virtuvės šviesa", result_targets)
+
 
 if __name__ == "__main__":
     unittest.main()
