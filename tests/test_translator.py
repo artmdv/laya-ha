@@ -14,18 +14,13 @@ class TestTranslator(unittest.IsolatedAsyncioTestCase):
         res = await async_translate_to_english("", session)
         self.assertEqual(res, "")
 
-    async def test_google_gtx_translation_success(self):
-        """Verify parsing of Google GTX JSON response."""
+    async def test_no_url_returns_text_unchanged_with_no_network_call(self):
+        """Without a custom URL, returns text unchanged without making network requests."""
         session = MagicMock()
-        mock_resp = AsyncMock()
-        mock_resp.status = 200
-        mock_resp.json = AsyncMock(
-            return_value=[[["turn off the light in the kitchen", "išjunk šviesą virtuvėj", None, None]]]
-        )
-        session.get.return_value.__aenter__.return_value = mock_resp
-
-        res = await async_translate_to_english("išjunk šviesą virtuvėj", session, source_lang="lt")
-        self.assertEqual(res, "turn off the light in the kitchen")
+        res = await async_translate_to_english("išjunk šviesą virtuvėj", session, custom_url=None)
+        self.assertEqual(res, "išjunk šviesą virtuvėj")
+        session.get.assert_not_called()
+        session.post.assert_not_called()
 
     async def test_custom_libretranslate_success(self):
         """Verify custom LibreTranslate URL is used if provided."""
