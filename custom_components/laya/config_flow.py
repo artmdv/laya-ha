@@ -23,6 +23,9 @@ from .const import (
     CONF_HIERARCHICAL_ROUTING,
     CONF_RESPONSE_STYLE,
     CONF_TIMEOUT,
+    CONF_TRANSLATE_TO_ENGLISH,
+    CONF_TRANSLATION_URL,
+    CONF_TRY_DEFAULT_AGENT_FIRST,
     CONF_URL,
     DEFAULT_API_KEY,
     DEFAULT_CONFIDENCE_THRESHOLD,
@@ -32,6 +35,9 @@ from .const import (
     DEFAULT_NAME,
     DEFAULT_RESPONSE_STYLE,
     DEFAULT_TIMEOUT,
+    DEFAULT_TRANSLATE_TO_ENGLISH,
+    DEFAULT_TRANSLATION_URL,
+    DEFAULT_TRY_DEFAULT_AGENT_FIRST,
     DEFAULT_URL,
     DOMAIN,
     STYLE_CONCISE,
@@ -92,6 +98,9 @@ class LayaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_TIMEOUT: DEFAULT_TIMEOUT,
                         CONF_HIERARCHICAL_ROUTING: DEFAULT_HIERARCHICAL_ROUTING,
                         CONF_DEBUG_LOGGING: DEFAULT_DEBUG_LOGGING,
+                        CONF_TRY_DEFAULT_AGENT_FIRST: DEFAULT_TRY_DEFAULT_AGENT_FIRST,
+                        CONF_TRANSLATE_TO_ENGLISH: DEFAULT_TRANSLATE_TO_ENGLISH,
+                        CONF_TRANSLATION_URL: DEFAULT_TRANSLATION_URL,
                     },
                 )
 
@@ -198,6 +207,28 @@ class LayaOptionsFlowHandler(OptionsFlowBase):
                             CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING
                         ),
                     ): selector.BooleanSelector(),
+                    vol.Optional(
+                        CONF_TRY_DEFAULT_AGENT_FIRST,
+                        default=options.get(
+                            CONF_TRY_DEFAULT_AGENT_FIRST, DEFAULT_TRY_DEFAULT_AGENT_FIRST
+                        ),
+                    ): selector.BooleanSelector(),
+                    vol.Optional(
+                        CONF_TRANSLATE_TO_ENGLISH,
+                        default=options.get(
+                            CONF_TRANSLATE_TO_ENGLISH, DEFAULT_TRANSLATE_TO_ENGLISH
+                        ),
+                    ): selector.BooleanSelector(),
+                    vol.Optional(
+                        CONF_TRANSLATION_URL,
+                        default=options.get(
+                            CONF_TRANSLATION_URL, DEFAULT_TRANSLATION_URL
+                        ),
+                    ): selector.TextSelector(
+                        selector.TextSelectorConfig(
+                            type=selector.TextSelectorType.URL,
+                        )
+                    ),
                     vol.Optional(
                         CONF_TIMEOUT,
                         default=options.get(CONF_TIMEOUT, DEFAULT_TIMEOUT),

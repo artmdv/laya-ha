@@ -58,6 +58,15 @@ DEFAULT_HIERARCHICAL_ROUTING = True
 CONF_DEBUG_LOGGING = "debug_logging"
 DEFAULT_DEBUG_LOGGING = False
 
+CONF_TRY_DEFAULT_AGENT_FIRST = "try_default_agent_first"
+DEFAULT_TRY_DEFAULT_AGENT_FIRST = True
+
+CONF_TRANSLATE_TO_ENGLISH = "translate_to_english"
+DEFAULT_TRANSLATE_TO_ENGLISH = True
+
+CONF_TRANSLATION_URL = "translation_url"
+DEFAULT_TRANSLATION_URL = ""
+
 # Multilingual area synonyms and stems to map spoken rooms to configured area names
 AREA_SYNONYMS: dict[str, list[str]] = {
     "kitchen": [

@@ -15,10 +15,10 @@ from homeassistant.components.conversation import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_URL, MATCH_ALL
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import area_registry, device_registry, entity_registry
+from homeassistant.helpers import area_registry, device_registry, entity_registry, intent
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
-from homeassistant.helpers.intent import IntentResponse
+from homeassistant.helpers.intent import IntentResponse, IntentResponseType
 
 from .client import (
     DecisionChoice,
@@ -39,6 +39,9 @@ from .const import (
     CONF_HIERARCHICAL_ROUTING,
     CONF_RESPONSE_STYLE,
     CONF_TIMEOUT,
+    CONF_TRANSLATE_TO_ENGLISH,
+    CONF_TRANSLATION_URL,
+    CONF_TRY_DEFAULT_AGENT_FIRST,
     DEFAULT_CONFIDENCE_THRESHOLD,
     DEFAULT_DEBUG_LOGGING,
     DEFAULT_EXPOSED_DOMAINS,
@@ -46,12 +49,16 @@ from .const import (
     DEFAULT_NAME,
     DEFAULT_RESPONSE_STYLE,
     DEFAULT_TIMEOUT,
+    DEFAULT_TRANSLATE_TO_ENGLISH,
+    DEFAULT_TRANSLATION_URL,
+    DEFAULT_TRY_DEFAULT_AGENT_FIRST,
     DOMAIN,
     LOCALIZED_RESPONSES,
     LOCALIZED_STATES,
     MAX_TARGET_CANDIDATES,
     STYLE_VERBOSE,
 )
+from .translator import async_translate_to_english
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -198,7 +205,67 @@ class LayaConversationEntity(ConversationEntity):
             CONF_HIERARCHICAL_ROUTING, DEFAULT_HIERARCHICAL_ROUTING
         )
         debug_logging: bool = options.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING)
-        self.client.debug_logging = debug_logging
+        # Step 0: Try Home Assistant built-in intent engine first if enabled
+        try_default_agent: bool = options.get(
+            CONF_TRY_DEFAULT_AGENT_FIRST, DEFAULT_TRY_DEFAULT_AGENT_FIRST
+        )
+        if try_default_agent:
+            try:
+                default_agent_id = getattr(conversation, "HOME_ASSISTANT_AGENT", "conversation.home_assistant")
+                default_res = await conversation.async_converse(
+                    hass=self.hass,
+                    text=text,
+                    conversation_id=user_input.conversation_id,
+                    context=user_input.context,
+                    agent_id=default_agent_id,
+                    language=user_input.language,
+                )
+                if default_res and default_res.response:
+                    resp_type = default_res.response.response_type
+                    # If an intent was matched and executed or answered, return directly
+                    if resp_type != IntentResponseType.ERROR:
+                        if debug_logging:
+                            _LOGGER.warning(
+                                "Laya [DEBUG] Handled natively by Home Assistant built-in agent: %s",
+                                getattr(default_res.response, "speech", ""),
+                            )
+                        return default_res
+                    # If error was NOT no_intent_match (e.g. an actual service failure), return it too
+                    err_code = (
+                        default_res.response.data.get("code")
+                        if default_res.response.data
+                        else None
+                    )
+                    if err_code and err_code != "no_intent_match":
+                        return default_res
+                    if debug_logging:
+                        _LOGGER.warning("Laya [DEBUG] Built-in agent returned no_intent_match, cascading to Laya")
+            except Exception as err:
+                _LOGGER.debug("Home Assistant default agent check bypassed: %s", err)
+
+        # Step 0.5: Optional translation to English before querying Laya
+        translate_to_en: bool = options.get(
+            CONF_TRANSLATE_TO_ENGLISH, DEFAULT_TRANSLATE_TO_ENGLISH
+        )
+        translation_url: str = options.get(
+            CONF_TRANSLATION_URL, DEFAULT_TRANSLATION_URL
+        )
+
+        query_text = text
+        translated_for_debug = None
+        if translate_to_en and lang != "en":
+            session = async_get_clientsession(self.hass)
+            translated = await async_translate_to_english(
+                text=text,
+                session=session,
+                custom_url=translation_url,
+                source_lang=lang,
+            )
+            if translated and translated.lower() != text.lower():
+                query_text = translated
+                translated_for_debug = translated
+                if debug_logging:
+                    _LOGGER.warning("Laya [DEBUG] Translated prompt '%s' -> '%s'", text, query_text)
 
         # 1. Discover registered areas and entities
         target_map, area_map = self._build_target_catalog(exposed_domains)
@@ -208,13 +275,13 @@ class LayaConversationEntity(ConversationEntity):
             return self._build_result(user_input, self._get_text(lang, "not_found"))
 
         # Intelligent candidate filtering to stay safely under Laya head_max_len=256
-        target_names = self._filter_target_candidates(text, target_map, MAX_TARGET_CANDIDATES)
+        target_names = self._filter_target_candidates(query_text, target_map, MAX_TARGET_CANDIDATES)
         if len(target_map) > MAX_TARGET_CANDIDATES:
             _LOGGER.debug(
                 "Filtered %d target candidates down to %d for '%s'",
                 len(target_map),
                 len(target_names),
-                text,
+                query_text,
             )
 
         # 2. Build action criteria with clear descriptions for Laya
@@ -229,7 +296,7 @@ class LayaConversationEntity(ConversationEntity):
             if hierarchical_routing and area_map:
                 action_choice, target_choice, target_map, resolved_area = (
                     await self._async_process_hierarchical(
-                        text=text,
+                        text=query_text,
                         action_criteria=action_criteria,
                         target_map=target_map,
                         area_map=area_map,
@@ -239,7 +306,7 @@ class LayaConversationEntity(ConversationEntity):
                 )
             else:
                 decision = await self.client.decide(
-                    command=text,
+                    command=query_text,
                     action_criteria=action_criteria,
                     target_criteria=target_names,
                 )
@@ -281,6 +348,7 @@ class LayaConversationEntity(ConversationEntity):
             )
         # Interrogative check: 'ar ...' or trailing '?' indicates an inquiry, never a command
         text_lower = text.lower()
+        query_lower = query_text.lower()
         is_question = (
             text_lower.startswith("ar ")
             or text.strip().endswith("?")
@@ -289,6 +357,10 @@ class LayaConversationEntity(ConversationEntity):
             or text_lower.startswith("kokia ")
             or text_lower.startswith("koks ")
             or text_lower.startswith("kiek ")
+            or query_lower.startswith("is ")
+            or query_lower.startswith("what ")
+            or query_lower.startswith("are ")
+            or query_lower.strip().endswith("?")
         )
         if is_question and action_choice.choice in (
             "turn_on",
@@ -308,6 +380,8 @@ class LayaConversationEntity(ConversationEntity):
             )
 
         debug_lines = []
+        if translated_for_debug:
+            debug_lines.append(f"Translated: {translated_for_debug}")
         if resolved_area:
             debug_lines.append(f"Area: {resolved_area}")
         debug_lines.append(f"Action: {action_choice.choice} (conf: {action_choice.confidence:.2f})")

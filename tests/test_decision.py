@@ -10,8 +10,42 @@ if "homeassistant" not in sys.modules:
     class _MockConversationEntity:
         pass
 
+    class _MockIntentResponseType:
+        ACTION_DONE = "action_done"
+        ERROR = "error"
+        QUERY_ANSWER = "query_answer"
+
+    class _MockIntentResponse:
+        def __init__(self, language="en"):
+            self.language = language
+            self.speech = None
+            self.speech_text = None
+
+        def async_set_speech(self, text):
+            self.speech_text = text
+            self.speech = {"plain": {"speech": text}}
+
+        def async_set_card(self, title, content):
+            pass
+
+        def async_set_results(self, success_results=None, failed_results=None):
+            pass
+
+    class _MockConversationResult:
+        def __init__(self, response, conversation_id=None):
+            self.response = response
+            self.conversation_id = conversation_id
+
     ha_mock.ConversationEntity = _MockConversationEntity
     ha_mock.components.conversation.ConversationEntity = _MockConversationEntity
+    ha_mock.helpers.intent.IntentResponseType = _MockIntentResponseType
+    ha_mock.helpers.intent.IntentResponse = _MockIntentResponse
+    ha_mock.components.conversation.ConversationResult = _MockConversationResult
+
+    _default_conv_res = MagicMock()
+    _default_conv_res.response.response_type = "error"
+    _default_conv_res.response.data = {"code": "no_intent_match"}
+    ha_mock.components.conversation.async_converse = AsyncMock(return_value=_default_conv_res)
 
     for mod in [
         "homeassistant",
@@ -29,6 +63,7 @@ if "homeassistant" not in sys.modules:
     ]:
         sys.modules[mod] = ha_mock
 
+from homeassistant.helpers.intent import IntentResponseType
 from custom_components.laya.client import DecisionChoice
 from custom_components.laya.const import (
     ACTION_DEFINITIONS,
@@ -493,6 +528,125 @@ class TestDecisionLogic(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(resolved_area, "Kitchen")
         self.assertEqual(target_choice.choice, "Virtuvės šviesa")
         self.assertIn("Virtuvės šviesa", result_targets)
+
+    async def test_default_agent_success_bypasses_laya(self):
+        """When built-in HA agent handles intent, it returns immediately without calling Laya."""
+        mock_client = MagicMock()
+        mock_hass = MagicMock()
+        entity = LayaConversationEntity(
+            hass=mock_hass,
+            entry=MagicMock(),
+            client=mock_client,
+        )
+        entity.entry.options = {"try_default_agent_first": True}
+
+        user_input = MagicMock()
+        user_input.text = "įjunk šviesą"
+        user_input.language = "lt"
+        user_input.conversation_id = "test_conv"
+        user_input.context = MagicMock()
+
+        success_res = MagicMock()
+        success_res.response.response_type = IntentResponseType.ACTION_DONE
+        success_res.response.speech = {"plain": {"speech": "Įjungta"}}
+
+        with unittest.mock.patch("custom_components.laya.conversation.conversation.async_converse", new_callable=AsyncMock) as mock_conv:
+            mock_conv.return_value = success_res
+            res = await entity._async_process_internal(user_input)
+            self.assertEqual(res, success_res)
+            mock_client.decide.assert_not_called()
+            mock_client.query.assert_not_called()
+
+    async def test_default_agent_no_intent_cascades_to_laya(self):
+        """When built-in HA agent returns no_intent_match, Laya processes the command."""
+        mock_client = MagicMock()
+        decision_mock = MagicMock()
+        decision_mock.action = DecisionChoice(choice="turn_on", confidence=0.95, probabilities={})
+        decision_mock.target = DecisionChoice(choice="Virtuvės šviesa", confidence=0.98, probabilities={})
+        mock_client.decide = AsyncMock(return_value=decision_mock)
+
+        mock_hass = MagicMock()
+        mock_hass.services.has_service.return_value = True
+        mock_hass.services.async_call = AsyncMock()
+
+        entity = LayaConversationEntity(
+            hass=mock_hass,
+            entry=MagicMock(),
+            client=mock_client,
+        )
+        entity.entry.options = {
+            "try_default_agent_first": True,
+            "translate_to_english": False,
+            "hierarchical_routing": False,
+        }
+
+        user_input = MagicMock()
+        user_input.text = "padaryk šviesiau"
+        user_input.language = "lt"
+        user_input.conversation_id = "test_conv"
+        user_input.context = MagicMock()
+
+        no_match_res = MagicMock()
+        no_match_res.response.response_type = IntentResponseType.ERROR
+        no_match_res.response.data = {"code": "no_intent_match"}
+
+        with unittest.mock.patch("custom_components.laya.conversation.conversation.async_converse", new_callable=AsyncMock) as mock_conv:
+            mock_conv.return_value = no_match_res
+            with unittest.mock.patch.object(entity, "_build_target_catalog") as mock_cat:
+                mock_cat.return_value = (
+                    {"Virtuvės šviesa": {"type": "entity", "id": "light.kitchen", "domain": "light"}},
+                    {"kitchen": "Kitchen"},
+                )
+                res = await entity._async_process_internal(user_input)
+                self.assertIsNotNone(res)
+                mock_client.decide.assert_called_once()
+
+    async def test_translation_translates_prompt_before_laya(self):
+        """When translate_to_english is enabled, prompt is translated to English for Laya."""
+        mock_client = MagicMock()
+        decision_mock = MagicMock()
+        decision_mock.action = DecisionChoice(choice="turn_off", confidence=0.99, probabilities={})
+        decision_mock.target = DecisionChoice(choice="kitchen lights", confidence=0.99, probabilities={})
+        mock_client.decide = AsyncMock(return_value=decision_mock)
+
+        mock_hass = MagicMock()
+        mock_hass.services.has_service.return_value = True
+        mock_hass.services.async_call = AsyncMock()
+
+        entity = LayaConversationEntity(
+            hass=mock_hass,
+            entry=MagicMock(),
+            client=mock_client,
+        )
+        entity.entry.options = {
+            "try_default_agent_first": False,
+            "translate_to_english": True,
+            "hierarchical_routing": False,
+        }
+
+        user_input = MagicMock()
+        user_input.text = "išjunk šviesą virtuvėj"
+        user_input.language = "lt"
+        user_input.conversation_id = "test_conv"
+        user_input.context = MagicMock()
+
+        with unittest.mock.patch(
+            "custom_components.laya.conversation.async_translate_to_english",
+            new_callable=AsyncMock,
+        ) as mock_trans:
+            mock_trans.return_value = "turn off the light in the kitchen"
+            with unittest.mock.patch.object(entity, "_build_target_catalog") as mock_cat:
+                mock_cat.return_value = (
+                    {"kitchen lights": {"type": "entity", "id": "light.kitchen", "domain": "light"}},
+                    {"kitchen": "Kitchen"},
+                )
+                with unittest.mock.patch.object(entity, "_build_result") as mock_build:
+                    res = await entity._async_process_internal(user_input)
+                    mock_trans.assert_called_once()
+                    mock_client.decide.assert_called_once()
+                    self.assertEqual(mock_client.decide.call_args.kwargs["command"], "turn off the light in the kitchen")
+                    mock_build.assert_called_once()
+                    self.assertEqual(mock_build.call_args[0][1], "Išjungta")
 
 
 if __name__ == "__main__":
