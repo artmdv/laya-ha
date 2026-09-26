@@ -98,7 +98,36 @@ def _detect_deterministic_action(text: str) -> tuple[str | None, float]:
     ):
         return "query_state", 1.0
 
-    # 2. Turn off (explicit off verbs)
+    # 2. Lawnmower
+    if any(
+        w in tokens
+        for w in (
+            "žoliapjovė",
+            "zoliapjove",
+            "žoliapjovę",
+            "žoliapjovės",
+            "zoliapjoves",
+            "žolę",
+            "zole",
+            "mower",
+        )
+    ):
+        if any(w in tokens for w in ("stotel", "stotelę", "namo", "grįžk", "grizk", "baze", "dock")):
+            return "dock_mower", 1.0
+        if any(w in tokens for w in ("stop", "sustabdyk", "pristabdyk", "pause")):
+            return "pause_mower", 1.0
+        if any(w in tokens for w in ("pjauk", "paleisk", "start", "pradėk", "pradek", "pjauna")):
+            return "start_mower", 1.0
+
+    # 3. Vacuum
+    if any(w in tokens for w in ("siurbk", "siurblys", "siurblį", "siurbli")):
+        if any(w in tokens for w in ("stotel", "namo", "grįžk", "grizk", "baze")):
+            return "dock_vacuum", 1.0
+        if any(w in tokens for w in ("stop", "sustabdyk")):
+            return "stop_vacuum", 1.0
+        return "start_vacuum", 1.0
+
+    # 4. Turn off (explicit off verbs)
     OFF_STEMS = (
         "išjunk", "isjunk", "išjungi", "isjungi", "išjungti", "isjungti",
         "išjunkite", "isjunkite", "užgesink", "uzgesink", "užgesinti",
@@ -109,7 +138,7 @@ def _detect_deterministic_action(text: str) -> tuple[str | None, float]:
         if stem in text_clean:
             return "turn_off", 1.0
 
-    # 3. Turn on (explicit on verbs)
+    # 5. Turn on (explicit on verbs)
     ON_STEMS = (
         "įjunk", "ijunk", "įjungi", "ijungi", "įjungti", "ijungti",
         "įjunkite", "ijunkite", "uždek", "uzdek", "uždegti", "uzdegti",
@@ -120,7 +149,7 @@ def _detect_deterministic_action(text: str) -> tuple[str | None, float]:
         if stem in text_clean:
             return "turn_on", 1.0
 
-    # 4. Open cover / gate / blinds
+    # 6. Open cover / gate / blinds
     OPEN_STEMS = (
         "atidaryk", "atidarykite", "atidaryti", "atidarik",
         "atverk", "atverkite", "pakelk", "pakelkite", "open "
@@ -129,7 +158,7 @@ def _detect_deterministic_action(text: str) -> tuple[str | None, float]:
         if stem in text_clean:
             return "open_cover", 1.0
 
-    # 5. Close cover / gate / blinds
+    # 7. Close cover / gate / blinds
     CLOSE_STEMS = (
         "uždaryk", "uzdaryk", "uždarykite", "uzdarykite", "uždaryti", "uzdaryti",
         "užverk", "uzverk", "nuleisk", "nuleiskite", "close "
@@ -138,19 +167,11 @@ def _detect_deterministic_action(text: str) -> tuple[str | None, float]:
         if stem in text_clean:
             return "close_cover", 1.0
 
-    # 6. Toggle
+    # 8. Toggle
     TOGGLE_STEMS = ("perjunk", "perjunkite", "toggle")
     for stem in TOGGLE_STEMS:
         if stem in text_clean:
             return "toggle", 1.0
-
-    # 7. Vacuum
-    if any(w in tokens for w in ("siurbk", "siurblys", "siurblį", "siurbli")):
-        if any(w in tokens for w in ("stotel", "namo", "grįžk", "grizk", "baze")):
-            return "dock_vacuum", 1.0
-        if any(w in tokens for w in ("stop", "sustabdyk")):
-            return "stop_vacuum", 1.0
-        return "start_vacuum", 1.0
 
     return None, 0.0
 
@@ -188,6 +209,7 @@ def filter_target_candidates(
             "switch",
             "cover",
             "vacuum",
+            "lawn_mower",
             "climate",
             "fan",
             "lock",
@@ -279,9 +301,11 @@ class LayaConversationEntity(ConversationEntity):
         confidence_threshold: float = options.get(
             CONF_CONFIDENCE_THRESHOLD, DEFAULT_CONFIDENCE_THRESHOLD
         )
-        exposed_domains: list[str] = options.get(
-            CONF_EXPOSED_DOMAINS, DEFAULT_EXPOSED_DOMAINS
+        exposed_domains: list[str] = list(
+            options.get(CONF_EXPOSED_DOMAINS, DEFAULT_EXPOSED_DOMAINS)
         )
+        if "lawn_mower" not in exposed_domains:
+            exposed_domains.append("lawn_mower")
         response_style: str = options.get(CONF_RESPONSE_STYLE, DEFAULT_RESPONSE_STYLE)
         hierarchical_routing: bool = options.get(
             CONF_HIERARCHICAL_ROUTING, DEFAULT_HIERARCHICAL_ROUTING
@@ -564,12 +588,23 @@ class LayaConversationEntity(ConversationEntity):
                     target_domain = "cover"
                 elif any(w in text_lower for w in ("switch", "socket", "rozet", "kištuk", "plug")):
                     target_domain = "switch"
+                elif any(w in text_lower for w in ("mower", "žoliapjov", "zoliapjov", "žol", "zol")):
+                    target_domain = "lawn_mower"
                 elif any(w in text_lower for w in ("vacuum", "siurbl")):
                     target_domain = "vacuum"
                 elif any(w in text_lower for w in ("media", "muzik", "grotuv", "televizor", "tv", "player")):
                     target_domain = "media_player"
 
-                if service_domain == "homeassistant":
+                if target_domain == "lawn_mower":
+                    if service_name in ("turn_on", "start"):
+                        target_service = "lawn_mower.start_mowing"
+                    elif service_name in ("turn_off", "return_to_base", "dock"):
+                        target_service = "lawn_mower.dock"
+                    elif service_name in ("pause", "stop"):
+                        target_service = "lawn_mower.pause"
+                    else:
+                        target_service = service_full
+                elif service_domain == "homeassistant":
                     target_service = f"{target_domain}.{service_name}"
                 else:
                     target_service = service_full
@@ -600,6 +635,22 @@ class LayaConversationEntity(ConversationEntity):
                 )
             else:
                 entity_id = resolved_target["id"]
+                ent_domain = resolved_target.get("domain") or entity_id.split(".")[0]
+                if ent_domain == "lawn_mower":
+                    if service_domain == "homeassistant":
+                        if service_name == "turn_on":
+                            service_full = "lawn_mower.start_mowing"
+                        elif service_name == "turn_off":
+                            service_full = "lawn_mower.dock"
+                    elif service_domain == "vacuum":
+                        if service_name in ("start", "start_cleaning"):
+                            service_full = "lawn_mower.start_mowing"
+                        elif service_name in ("pause", "stop"):
+                            service_full = "lawn_mower.pause"
+                        elif service_name in ("return_to_base", "dock"):
+                            service_full = "lawn_mower.dock"
+                    service_domain, service_name = service_full.split(".", 1)
+
                 log_msg = f"Executing {service_full} on entity '{target_name}' ({entity_id})"
                 if debug_logging:
                     _LOGGER.warning("Laya [DEBUG] %s", log_msg)
@@ -796,18 +847,18 @@ class LayaConversationEntity(ConversationEntity):
                     dev_area_map[dev.id] = dev.area_id
 
         area_entities: dict[str, dict[str, Any]] = {}
+        device_area_entities: dict[str, list[tuple[str, str]]] = {}
 
         for state in self.hass.states.async_all():
             if state.domain not in exposed_domains:
                 continue
 
             ent_entry = ent_reg.async_get(state.entity_id) if ent_reg else None
+            dev_id = getattr(ent_entry, "device_id", None) if ent_entry else None
             ent_area_id = None
             if ent_entry:
                 ent_area_id = getattr(ent_entry, "area_id", None) or (
-                    dev_area_map.get(getattr(ent_entry, "device_id", None))
-                    if getattr(ent_entry, "device_id", None)
-                    else None
+                    dev_area_map.get(dev_id) if dev_id else None
                 )
 
             if ent_area_id == area_id:
@@ -818,6 +869,9 @@ class LayaConversationEntity(ConversationEntity):
                     "id": state.entity_id,
                     "domain": state.domain,
                 }
+                if dev_id:
+                    device_area_entities.setdefault(dev_id, []).append((state.entity_id, state.domain))
+
                 if ent_entry and hasattr(ent_entry, "aliases") and ent_entry.aliases:
                     for alias in ent_entry.aliases:
                         alias_str = _safe_str(alias)
@@ -827,6 +881,48 @@ class LayaConversationEntity(ConversationEntity):
                                 "id": state.entity_id,
                                 "domain": state.domain,
                             }
+
+        # Associate device-level names and aliases in this area
+        PRIMARY_DOMAINS = (
+            "lawn_mower",
+            "vacuum",
+            "light",
+            "cover",
+            "climate",
+            "media_player",
+            "fan",
+            "lock",
+            "switch",
+            "binary_sensor",
+            "sensor",
+        )
+        if dev_reg:
+            for dev_id, ent_list in device_area_entities.items():
+                dev = dev_reg.async_get(dev_id) if hasattr(dev_reg, "async_get") else getattr(dev_reg, "devices", {}).get(dev_id)
+                if not dev:
+                    continue
+
+                def _domain_rank(item: tuple[str, str]) -> int:
+                    try:
+                        return PRIMARY_DOMAINS.index(item[1])
+                    except ValueError:
+                        return 999
+
+                sorted_entities = sorted(ent_list, key=_domain_rank)
+                primary_entity_id, primary_domain = sorted_entities[0]
+
+                dev_name_user = getattr(dev, "name_by_user", None)
+                if dev_name_user:
+                    dev_name_str = _safe_str(dev_name_user)
+                    if dev_name_str and dev_name_str not in area_entities:
+                        area_entities[dev_name_str] = {"type": "entity", "id": primary_entity_id, "domain": primary_domain}
+
+                dev_aliases = getattr(dev, "aliases", None)
+                if dev_aliases:
+                    for alias in dev_aliases:
+                        alias_str = _safe_str(alias)
+                        if alias_str:
+                            area_entities[alias_str] = {"type": "entity", "id": primary_entity_id, "domain": primary_domain}
 
         return area_entities
 
@@ -842,7 +938,7 @@ class LayaConversationEntity(ConversationEntity):
     def _build_target_catalog(
         self, exposed_domains: list[str]
     ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
-        """Collect all matching device friendly names and registered areas."""
+        """Collect all matching device friendly names, device aliases, and registered areas."""
         target_map: dict[str, dict[str, Any]] = {}
         area_map: dict[str, str] = {}
 
@@ -869,6 +965,9 @@ class LayaConversationEntity(ConversationEntity):
 
         # 2. Add Entities
         ent_reg = entity_registry.async_get(self.hass)
+        dev_reg = device_registry.async_get(self.hass)
+        device_exposed_entities: dict[str, list[tuple[str, str]]] = {}
+
         for state in self.hass.states.async_all():
             domain = state.domain
             if domain not in exposed_domains:
@@ -880,13 +979,61 @@ class LayaConversationEntity(ConversationEntity):
 
             target_map[name_to_use] = {"type": "entity", "id": entity_id, "domain": domain}
 
-            # Check entity registry for extra aliases (safely handles ComputedNameType)
-            ent_entry = ent_reg.async_get(entity_id)
-            if ent_entry and hasattr(ent_entry, "aliases") and ent_entry.aliases:
-                for alias in ent_entry.aliases:
-                    alias_str = _safe_str(alias)
-                    if alias_str:
-                        target_map[alias_str] = {"type": "entity", "id": entity_id, "domain": domain}
+            # Check entity registry for extra aliases and device mapping
+            ent_entry = ent_reg.async_get(entity_id) if ent_reg else None
+            if ent_entry:
+                if getattr(ent_entry, "device_id", None):
+                    device_exposed_entities.setdefault(ent_entry.device_id, []).append((entity_id, domain))
+
+                if hasattr(ent_entry, "aliases") and ent_entry.aliases:
+                    for alias in ent_entry.aliases:
+                        alias_str = _safe_str(alias)
+                        if alias_str:
+                            target_map[alias_str] = {"type": "entity", "id": entity_id, "domain": domain}
+
+        # 3. Associate Device-level Aliases and User Names with Primary Entity
+        PRIMARY_DOMAINS = (
+            "lawn_mower",
+            "vacuum",
+            "light",
+            "cover",
+            "climate",
+            "media_player",
+            "fan",
+            "lock",
+            "switch",
+            "binary_sensor",
+            "sensor",
+        )
+        if dev_reg:
+            for dev_id, ent_list in device_exposed_entities.items():
+                dev = dev_reg.async_get(dev_id) if hasattr(dev_reg, "async_get") else getattr(dev_reg, "devices", {}).get(dev_id)
+                if not dev:
+                    continue
+
+                def _domain_rank(item: tuple[str, str]) -> int:
+                    try:
+                        return PRIMARY_DOMAINS.index(item[1])
+                    except ValueError:
+                        return 999
+
+                sorted_entities = sorted(ent_list, key=_domain_rank)
+                primary_entity_id, primary_domain = sorted_entities[0]
+
+                # User-assigned device name
+                dev_name_user = getattr(dev, "name_by_user", None)
+                if dev_name_user:
+                    dev_name_str = _safe_str(dev_name_user)
+                    if dev_name_str and dev_name_str not in target_map:
+                        target_map[dev_name_str] = {"type": "entity", "id": primary_entity_id, "domain": primary_domain}
+
+                # Device-level aliases (e.g. Žolės pjovimo robotas, Žolės robotas, Žoliapjovė)
+                dev_aliases = getattr(dev, "aliases", None)
+                if dev_aliases:
+                    for alias in dev_aliases:
+                        alias_str = _safe_str(alias)
+                        if alias_str:
+                            target_map[alias_str] = {"type": "entity", "id": primary_entity_id, "domain": primary_domain}
 
         return target_map, area_map
 
@@ -950,6 +1097,36 @@ class LayaConversationEntity(ConversationEntity):
                 val = "locked" if raw_state in ("locked", "off") else "unlocked"
                 return f"{target_name} is {val}"
 
+        # Handle lawn mowers
+        if domain == "lawn_mower" or any(w in target_name.lower() for w in ("žoliapjov", "zoliapjov", "mower")):
+            if lang == "lt":
+                if raw_state == "mowing":
+                    return f"{target_name} pjauna žolę" if "žol" not in target_name.lower() else f"{target_name} pjauna"
+                elif raw_state == "docked":
+                    return f"{target_name} yra stotelėje"
+                elif raw_state in ("paused", "stop", "stopped"):
+                    return f"{target_name} yra pristabdyta"
+                elif raw_state in ("error", "problem"):
+                    return f"{target_name}: klaida"
+                elif raw_state in ("returning", "returning_to_dock"):
+                    return f"{target_name} grįžta į stotelę"
+                else:
+                    val = state_dict.get(raw_state.lower(), raw_state)
+                    return f"{target_name} {is_word} {val}"
+            else:
+                if raw_state == "mowing":
+                    return f"{target_name} is mowing"
+                elif raw_state == "docked":
+                    return f"{target_name} is docked"
+                elif raw_state in ("paused", "stop", "stopped"):
+                    return f"{target_name} is paused"
+                elif raw_state in ("error", "problem"):
+                    return f"{target_name} reported an error"
+                elif raw_state in ("returning", "returning_to_dock"):
+                    return f"{target_name} is returning to dock"
+                else:
+                    return f"{target_name} is {raw_state}"
+
         # Handle binary motion / occupancy sensors
         if domain == "binary_sensor" and device_class in ("motion", "occupancy"):
             if lang == "lt":
@@ -970,6 +1147,7 @@ class LayaConversationEntity(ConversationEntity):
         is_humidity_query = any(w in text_lower for w in ("drėgm", "dregm", "humidity"))
         is_cover_query = any(w in text_lower for w in ("vart", "užuolaid", "uzuolaid", "rolet", "žaliuz", "zaliuz", "cover", "blind", "gate"))
         is_door_query = any(w in text_lower for w in ("dur", "lang", "door", "window"))
+        is_mower_query = any(w in text_lower for w in ("žoliapjov", "zoliapjov", "žol", "zol", "mow"))
 
         ent_reg = entity_registry.async_get(self.hass)
         dev_reg = device_registry.async_get(self.hass)
@@ -986,6 +1164,7 @@ class LayaConversationEntity(ConversationEntity):
         area_lights = []
         area_covers = []
         area_doors = []
+        area_mowers = []
         area_temp = None
         area_humidity = None
 
@@ -1019,6 +1198,8 @@ class LayaConversationEntity(ConversationEntity):
                 area_lights.append(state)
             elif domain == "cover":
                 area_covers.append(state)
+            elif domain == "lawn_mower":
+                area_mowers.append(state)
             elif domain == "binary_sensor" and dev_class in ("door", "garage_door", "window", "opening"):
                 area_doors.append(state)
             elif domain == "climate" and "current_temperature" in state.attributes and not area_temp:
@@ -1054,7 +1235,13 @@ class LayaConversationEntity(ConversationEntity):
                 return f"{area_name} yra atidaryta" if open_doors else f"{area_name} viskas uždaryta"
             return f"{area_name} is open" if open_doors else f"{area_name} is closed"
 
-        # 4. Humidity Query
+        # 4. Lawnmower Query
+        if is_mower_query and area_mowers:
+            mower = area_mowers[0]
+            mower_name = _safe_str(mower.attributes.get("friendly_name")) or area_name
+            return self._format_state_query_response(mower_name, mower, lang)
+
+        # 5. Humidity Query
         if is_humidity_query and area_humidity:
             val, unit = area_humidity
             if lang == "lt":

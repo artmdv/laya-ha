@@ -780,7 +780,106 @@ class TestDecisionLogic(unittest.IsolatedAsyncioTestCase):
         res_light = entity._query_area_state("kitchen", "Virtuvė", "lt", text="ar virtuvėje įjungta šviesa?")
         self.assertEqual(res_light, "Virtuvė visos šviesos yra išjungtos")
 
+        # 3. Ask for mower in garden
+        mock_mower_state = MagicMock()
+        mock_mower_state.domain = "lawn_mower"
+        mock_mower_state.state = "mowing"
+        mock_mower_state.attributes = {"friendly_name": "Žoliapjovė"}
+        mock_mower_state.entity_id = "lawn_mower.garden_mower"
+        mock_hass.states.async_all.return_value = [mock_mower_state]
+        res_mower = entity._query_area_state("garden", "Sodas", "lt", text="ar sode žoliapjovė pjauna?")
+        self.assertEqual(res_mower, "Žoliapjovė pjauna")
+
+    def test_lawn_mower_deterministic_actions(self):
+        """Verify lawn mower spoken commands are deterministically routed."""
+        from custom_components.laya.conversation import _detect_deterministic_action
+        self.assertEqual(_detect_deterministic_action("ar žoliapjovė pjauna?"), ("query_state", 1.0))
+        self.assertEqual(_detect_deterministic_action("paleisk žoliapjovę"), ("start_mower", 1.0))
+        self.assertEqual(_detect_deterministic_action("pjauk žolę"), ("start_mower", 1.0))
+        self.assertEqual(_detect_deterministic_action("sustabdyk žoliapjovę"), ("pause_mower", 1.0))
+        self.assertEqual(_detect_deterministic_action("grąžink žoliapjovę į stotelę"), ("dock_mower", 1.0))
+
+    def test_device_level_aliases_registered_in_target_catalog(self):
+        """Device-level aliases added in HA UI map directly to the primary lawn_mower entity."""
+        mock_hass = MagicMock()
+
+        # Mock mower state
+        mock_mower_state = MagicMock()
+        mock_mower_state.domain = "lawn_mower"
+        mock_mower_state.entity_id = "lawn_mower.lidax_ultra_1200"
+        mock_mower_state.attributes = {"friendly_name": "LiDAX Ultra 1200"}
+
+        # Mock sensor on same device
+        mock_battery_state = MagicMock()
+        mock_battery_state.domain = "sensor"
+        mock_battery_state.entity_id = "sensor.lidax_battery"
+        mock_battery_state.attributes = {"friendly_name": "LiDAX Battery"}
+
+        mock_hass.states.async_all.return_value = [mock_mower_state, mock_battery_state]
+
+        # Entity registry entries pointing to device_1
+        mock_mower_ent = MagicMock()
+        mock_mower_ent.device_id = "device_1"
+        mock_mower_ent.aliases = []
+
+        mock_battery_ent = MagicMock()
+        mock_battery_ent.device_id = "device_1"
+        mock_battery_ent.aliases = []
+
+        # Device registry entry with user aliases from screenshot
+        mock_device = MagicMock()
+        mock_device.id = "device_1"
+        mock_device.name_by_user = None
+        mock_device.aliases = ["Žolės pjovimo robotas", "Žolės robotas", "Žoliapjovė"]
+
+        entity = LayaConversationEntity(hass=mock_hass, entry=MagicMock(), client=MagicMock())
+
+        with unittest.mock.patch("custom_components.laya.conversation.entity_registry.async_get") as mock_ent_reg, \
+             unittest.mock.patch("custom_components.laya.conversation.device_registry.async_get") as mock_dev_reg, \
+             unittest.mock.patch("custom_components.laya.conversation.area_registry.async_get") as mock_area_reg:
+
+            mock_area_reg.return_value.areas = {}
+            mock_ent_reg.return_value.async_get.side_effect = lambda eid: mock_mower_ent if eid == "lawn_mower.lidax_ultra_1200" else mock_battery_ent
+            mock_dev_reg.return_value.async_get.side_effect = lambda did: mock_device if did == "device_1" else None
+
+            target_map, _ = entity._build_target_catalog(["lawn_mower", "sensor"])
+
+            self.assertIn("Žoliapjovė", target_map)
+            self.assertEqual(target_map["Žoliapjovė"]["id"], "lawn_mower.lidax_ultra_1200")
+            self.assertEqual(target_map["Žoliapjovė"]["domain"], "lawn_mower")
+
+            self.assertIn("Žolės robotas", target_map)
+            self.assertEqual(target_map["Žolės robotas"]["id"], "lawn_mower.lidax_ultra_1200")
+
+            self.assertIn("Žolės pjovimo robotas", target_map)
+            self.assertEqual(target_map["Žolės pjovimo robotas"]["id"], "lawn_mower.lidax_ultra_1200")
+
+    def test_lawn_mower_state_queries(self):
+        """Lawn mower status queries format natural responses in Lithuanian."""
+        entity = LayaConversationEntity(hass=MagicMock(), entry=MagicMock(), client=MagicMock())
+        mock_mower = MagicMock()
+        mock_mower.domain = "lawn_mower"
+        mock_mower.attributes = {}
+
+        mock_mower.state = "mowing"
+        res_mowing = entity._format_state_query_response("Žoliapjovė", mock_mower, "lt")
+        self.assertEqual(res_mowing, "Žoliapjovė pjauna")
+        self.assertEqual(entity._format_state_query_response("Robotas", mock_mower, "lt"), "Robotas pjauna žolę")
+
+        mock_mower.state = "docked"
+        res_docked = entity._format_state_query_response("Žoliapjovė", mock_mower, "lt")
+        self.assertEqual(res_docked, "Žoliapjovė yra stotelėje")
+
+        mock_mower.state = "paused"
+        res_paused = entity._format_state_query_response("Žoliapjovė", mock_mower, "lt")
+        self.assertEqual(res_paused, "Žoliapjovė yra pristabdyta")
+
+        mock_mower.state = "error"
+        res_err = entity._format_state_query_response("Žoliapjovė", mock_mower, "lt")
+        self.assertEqual(res_err, "Žoliapjovė: klaida")
+
 
 if __name__ == "__main__":
     unittest.main()
+
 
