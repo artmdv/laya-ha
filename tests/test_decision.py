@@ -739,6 +739,47 @@ class TestDecisionLogic(unittest.IsolatedAsyncioTestCase):
                 )
                 self.assertEqual(mock_build.call_args[0][1], "Išjungta")
 
+    def test_query_gate_state_returns_plural_atidaryti(self):
+        """Covers and gates return natural plural form in Lithuanian (atidaryti / uždaryti)."""
+        entity = LayaConversationEntity(hass=MagicMock(), entry=MagicMock(), client=MagicMock())
+        mock_gate = MagicMock()
+        mock_gate.domain = "cover"
+        mock_gate.attributes = {}
+
+        mock_gate.state = "open"
+        res_open = entity._format_state_query_response("Kiemo vartai", mock_gate, "lt")
+        self.assertEqual(res_open, "Kiemo vartai yra atidaryti")
+
+        mock_gate.state = "closed"
+        res_closed = entity._format_state_query_response("Kiemo vartai", mock_gate, "lt")
+        self.assertEqual(res_closed, "Kiemo vartai yra uždaryti")
+
+    def test_query_area_temperature_and_lights(self):
+        """Querying an area intelligently reports temperature or light state based on utterance."""
+        mock_hass = MagicMock()
+        mock_temp_state = MagicMock()
+        mock_temp_state.domain = "sensor"
+        mock_temp_state.state = "21.5"
+        mock_temp_state.attributes = {"unit_of_measurement": "°C", "device_class": "temperature"}
+        mock_temp_state.entity_id = "sensor.kitchen_temperature"
+
+        mock_light_state = MagicMock()
+        mock_light_state.domain = "light"
+        mock_light_state.state = "off"
+        mock_light_state.attributes = {}
+        mock_light_state.entity_id = "light.kitchen_ceiling"
+
+        mock_hass.states.async_all.return_value = [mock_temp_state, mock_light_state]
+        entity = LayaConversationEntity(hass=mock_hass, entry=MagicMock(), client=MagicMock())
+
+        # 1. Ask for temperature
+        res_temp = entity._query_area_state("kitchen", "Virtuvė", "lt", text="kokia temperatūra virtuvėje?")
+        self.assertEqual(res_temp, "Virtuvė temperatūra yra 21.5 °C")
+
+        # 2. Ask for lights
+        res_light = entity._query_area_state("kitchen", "Virtuvė", "lt", text="ar virtuvėje įjungta šviesa?")
+        self.assertEqual(res_light, "Virtuvė visos šviesos yra išjungtos")
+
 
 if __name__ == "__main__":
     unittest.main()

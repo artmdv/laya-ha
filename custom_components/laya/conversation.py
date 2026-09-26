@@ -541,7 +541,7 @@ class LayaConversationEntity(ConversationEntity):
                 return self._build_result(user_input, speech, resolved_target, debug_card=debug_card)
             elif resolved_target["type"] == "area":
                 area_id = resolved_target["id"]
-                speech = self._query_area_state(area_id, target_name, lang)
+                speech = self._query_area_state(area_id, target_name, lang, text)
                 debug_card = f"{debug_card_base}\nArea ID: {area_id}\nQuery: {speech}" if debug_card_base else None
                 return self._build_result(user_input, speech, resolved_target, debug_card=debug_card)
 
@@ -909,22 +909,67 @@ class LayaConversationEntity(ConversationEntity):
         """Format a clear, natural status query answer for sensors and devices."""
         raw_state = state_obj.state
         unit = state_obj.attributes.get("unit_of_measurement")
+        domain = getattr(state_obj, "domain", None) or state_obj.entity_id.split(".")[0]
+        device_class = state_obj.attributes.get("device_class")
 
         state_dict = LOCALIZED_STATES.get(lang, LOCALIZED_STATES["en"])
         is_word = state_dict.get("is", "is")
 
         # Handle numeric / measurement states (e.g. 21.5 °C, 55%, 150 W)
         if unit:
+            if lang == "lt":
+                if "temperat" in target_name.lower() or device_class == "temperature":
+                    return f"{target_name} yra {raw_state} {unit}"
             return f"{target_name} {is_word} {raw_state} {unit}"
 
-        # Handle discrete states (open/closed, on/off, locked/unlocked)
+        # Handle covers and door/window opening sensors
+        if domain == "cover" or device_class in ("door", "garage_door", "window", "opening", "gate"):
+            if lang == "lt":
+                # Check for plural nouns in Lithuanian (e.g. vartai, durys, žaliuzės)
+                is_plural = any(target_name.lower().endswith(end) for end in ("ai", "ys", "ės", "es"))
+                if raw_state in ("open", "on"):
+                    val = "atidaryti" if is_plural else "atidaryta"
+                elif raw_state in ("closed", "off"):
+                    val = "uždaryti" if is_plural else "uždaryta"
+                elif raw_state == "opening":
+                    val = "atsidaro"
+                elif raw_state == "closing":
+                    val = "užsidaro"
+                else:
+                    val = state_dict.get(raw_state.lower(), raw_state)
+                return f"{target_name} {is_word} {val}"
+            else:
+                val = "open" if raw_state in ("open", "on") else "closed" if raw_state in ("closed", "off") else raw_state
+                return f"{target_name} is {val}"
+
+        if domain == "lock" or device_class == "lock":
+            if lang == "lt":
+                val = "užrakinta" if raw_state in ("locked", "off") else "atrakinta"
+                return f"{target_name} {is_word} {val}"
+            else:
+                val = "locked" if raw_state in ("locked", "off") else "unlocked"
+                return f"{target_name} is {val}"
+
+        # Handle binary motion / occupancy sensors
+        if domain == "binary_sensor" and device_class in ("motion", "occupancy"):
+            if lang == "lt":
+                return f"{target_name}: užfiksuotas judesys" if raw_state == "on" else f"{target_name}: judesio nėra"
+            return f"{target_name}: motion detected" if raw_state == "on" else f"{target_name}: clear"
+
+        # Discrete states (on/off, etc.)
         translated_state = state_dict.get(raw_state.lower(), raw_state)
         return f"{target_name} {is_word} {translated_state}"
 
-    def _query_area_state(self, area_id: str, area_name: str, lang: str) -> str:
-        """Find the most relevant sensor (temperature/climate) for an area query."""
+    def _query_area_state(self, area_id: str, area_name: str, lang: str, text: str = "") -> str:
+        """Find and format the most relevant state for an area query (temperature, lights, covers)."""
         state_dict = LOCALIZED_STATES.get(lang, LOCALIZED_STATES["en"])
         is_word = state_dict.get("is", "is")
+        text_lower = text.lower()
+
+        is_light_query = any(w in text_lower for w in ("švies", "svies", "lemp", "apšviet", "apsviet", "light"))
+        is_humidity_query = any(w in text_lower for w in ("drėgm", "dregm", "humidity"))
+        is_cover_query = any(w in text_lower for w in ("vart", "užuolaid", "uzuolaid", "rolet", "žaliuz", "zaliuz", "cover", "blind", "gate"))
+        is_door_query = any(w in text_lower for w in ("dur", "lang", "door", "window"))
 
         ent_reg = entity_registry.async_get(self.hass)
         dev_reg = device_registry.async_get(self.hass)
@@ -935,8 +980,15 @@ class LayaConversationEntity(ConversationEntity):
                 if getattr(dev, "area_id", None):
                     dev_area_map[dev.id] = dev.area_id
 
-        # Search for temperature sensor or climate entity in this area
-        found_sensor = None
+        area_lower = area_name.lower()
+        area_stem = area_lower[:4] if len(area_lower) >= 4 else area_lower
+
+        area_lights = []
+        area_covers = []
+        area_doors = []
+        area_temp = None
+        area_humidity = None
+
         for state in self.hass.states.async_all():
             if state.state in (None, "unavailable", "unknown"):
                 continue
@@ -950,25 +1002,78 @@ class LayaConversationEntity(ConversationEntity):
                     else None
                 )
 
-            if ent_area_id == area_id:
-                if state.domain == "climate" and "current_temperature" in state.attributes:
-                    temp = state.attributes["current_temperature"]
-                    unit = getattr(getattr(self.hass.config, "units", None), "temperature_unit", "°C")
-                    return f"{area_name} {is_word} {temp} {unit}"
-                if state.domain == "sensor" and (
-                    state.attributes.get("device_class") == "temperature"
-                    or "temperature" in state.entity_id.lower()
-                    or "temperat" in state.entity_id.lower()
-                    or state.attributes.get("unit_of_measurement") in ("°C", "°F", "K")
-                ):
-                    unit = state.attributes.get("unit_of_measurement", "°C")
-                    return f"{area_name} {is_word} {state.state} {unit}"
-                if state.domain == "sensor" and not found_sensor:
-                    found_sensor = state
+            # Check if entity belongs to this area
+            matches_area = (
+                ent_area_id == area_id
+                or area_lower in state.entity_id.lower()
+                or area_id in state.entity_id.lower()
+                or (ent_entry and hasattr(ent_entry, "name") and ent_entry.name and area_stem in ent_entry.name.lower())
+            )
+            if not matches_area:
+                continue
 
-        if found_sensor:
-            unit = found_sensor.attributes.get("unit_of_measurement", "")
-            return f"{area_name} {is_word} {found_sensor.state} {unit}".strip()
+            domain = state.domain
+            dev_class = state.attributes.get("device_class")
+
+            if domain == "light":
+                area_lights.append(state)
+            elif domain == "cover":
+                area_covers.append(state)
+            elif domain == "binary_sensor" and dev_class in ("door", "garage_door", "window", "opening"):
+                area_doors.append(state)
+            elif domain == "climate" and "current_temperature" in state.attributes and not area_temp:
+                area_temp = (state.attributes["current_temperature"], getattr(getattr(self.hass.config, "units", None), "temperature_unit", "°C"))
+            elif domain == "sensor" and (
+                dev_class == "temperature"
+                or "temperature" in state.entity_id.lower()
+                or "temperat" in state.entity_id.lower()
+                or state.attributes.get("unit_of_measurement") in ("°C", "°F", "K")
+            ) and not area_temp:
+                area_temp = (state.state, state.attributes.get("unit_of_measurement", "°C"))
+            elif domain == "sensor" and (dev_class == "humidity" or "drėgm" in state.entity_id.lower() or "dregm" in state.entity_id.lower() or "%" in str(state.attributes.get("unit_of_measurement", ""))) and not area_humidity:
+                area_humidity = (state.state, state.attributes.get("unit_of_measurement", "%"))
+
+        # 1. Light Query
+        if is_light_query and area_lights:
+            on_lights = [l for l in area_lights if l.state == "on"]
+            if lang == "lt":
+                return f"{area_name} šviesa yra įjungta" if on_lights else f"{area_name} visos šviesos yra išjungtos"
+            return f"Lights in {area_name} are on" if on_lights else f"Lights in {area_name} are off"
+
+        # 2. Cover / Gate Query
+        if is_cover_query and area_covers:
+            open_covers = [c for c in area_covers if c.state in ("open", "opening")]
+            if lang == "lt":
+                return f"{area_name} yra atidaryta" if open_covers else f"{area_name} yra uždaryta"
+            return f"{area_name} is open" if open_covers else f"{area_name} is closed"
+
+        # 3. Door / Window Query
+        if is_door_query and area_doors:
+            open_doors = [d for d in area_doors if d.state == "on"]
+            if lang == "lt":
+                return f"{area_name} yra atidaryta" if open_doors else f"{area_name} viskas uždaryta"
+            return f"{area_name} is open" if open_doors else f"{area_name} is closed"
+
+        # 4. Humidity Query
+        if is_humidity_query and area_humidity:
+            val, unit = area_humidity
+            if lang == "lt":
+                return f"{area_name} drėgmė yra {val} {unit}"
+            return f"{area_name} humidity is {val} {unit}"
+
+        # 5. Temperature Query (or default state inquiry for area)
+        if area_temp:
+            val, unit = area_temp
+            if lang == "lt":
+                return f"{area_name} temperatūra yra {val} {unit}"
+            return f"{area_name} temperature is {val} {unit}"
+
+        # Fallback to lights status if any lights exist
+        if area_lights:
+            on_lights = [l for l in area_lights if l.state == "on"]
+            if lang == "lt":
+                return f"{area_name} šviesa yra įjungta" if on_lights else f"{area_name} visos šviesos yra išjungtos"
+            return f"Lights in {area_name} are on" if on_lights else f"Lights in {area_name} are off"
 
         return self._get_text(lang, "not_found")
 
