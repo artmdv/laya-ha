@@ -74,6 +74,88 @@ def _safe_str(val: Any) -> str:
     return str(val).strip()
 
 
+def _normalize_lithuanian_phonetics(text: str) -> str:
+    """Normalize common Whisper phonetic slips and typos in Lithuanian smart home commands."""
+    t = text.lower()
+    # Voicing slips at word end for imperative verbs (e.g. atidaryg -> atidaryk, isjung -> isjunk)
+    t = re.sub(r"\b(atidary|uždary|uzdary)g\b", r"\1k", t)
+    t = re.sub(r"\b(i[šs]jun|[įi]jun)g\b", r"\1k", t)
+    t = re.sub(r"\b(užgesin|uzgesin)g\b", r"\1k", t)
+    return t
+
+
+def _detect_deterministic_action(text: str) -> tuple[str | None, float]:
+    """Detect unambiguous action intent from Lithuanian and English verb stems."""
+    text_clean = _normalize_lithuanian_phonetics(text.lower())
+    tokens = re.findall(r"\w+", text_clean)
+
+    # 1. Questions / Inquiries
+    if (
+        text_clean.startswith("ar ")
+        or text.strip().endswith("?")
+        or any(text_clean.startswith(q) for q in ("kokia ", "koks ", "kiek ", "what ", "is ", "how "))
+        or any(w in tokens for w in ("temperatūra", "temperatura", "būsena", "busena"))
+    ):
+        return "query_state", 1.0
+
+    # 2. Turn off (explicit off verbs)
+    OFF_STEMS = (
+        "išjunk", "isjunk", "išjungi", "isjungi", "išjungti", "isjungti",
+        "išjunkite", "isjunkite", "užgesink", "uzgesink", "užgesinti",
+        "uzgesinti", "užgesinkite", "uzgesinkite", "atjunk", "atjunkite",
+        "turn off", "switch off", "power off"
+    )
+    for stem in OFF_STEMS:
+        if stem in text_clean:
+            return "turn_off", 1.0
+
+    # 3. Turn on (explicit on verbs)
+    ON_STEMS = (
+        "įjunk", "ijunk", "įjungi", "ijungi", "įjungti", "ijungti",
+        "įjunkite", "ijunkite", "uždek", "uzdek", "uždegti", "uzdegti",
+        "uždekite", "uzdekite", "paleisk", "paleisti", "paleiskite",
+        "turn on", "switch on", "power on"
+    )
+    for stem in ON_STEMS:
+        if stem in text_clean:
+            return "turn_on", 1.0
+
+    # 4. Open cover / gate / blinds
+    OPEN_STEMS = (
+        "atidaryk", "atidarykite", "atidaryti", "atidarik",
+        "atverk", "atverkite", "pakelk", "pakelkite", "open "
+    )
+    for stem in OPEN_STEMS:
+        if stem in text_clean:
+            return "open_cover", 1.0
+
+    # 5. Close cover / gate / blinds
+    CLOSE_STEMS = (
+        "uždaryk", "uzdaryk", "uždarykite", "uzdarykite", "uždaryti", "uzdaryti",
+        "užverk", "uzverk", "nuleisk", "nuleiskite", "close "
+    )
+    for stem in CLOSE_STEMS:
+        if stem in text_clean:
+            return "close_cover", 1.0
+
+    # 6. Toggle
+    TOGGLE_STEMS = ("perjunk", "perjunkite", "toggle")
+    for stem in TOGGLE_STEMS:
+        if stem in text_clean:
+            return "toggle", 1.0
+
+    # 7. Vacuum
+    if any(w in tokens for w in ("siurbk", "siurblys", "siurblį", "siurbli")):
+        if any(w in tokens for w in ("stotel", "namo", "grįžk", "grizk", "baze")):
+            return "dock_vacuum", 1.0
+        if any(w in tokens for w in ("stop", "sustabdyk")):
+            return "stop_vacuum", 1.0
+        return "start_vacuum", 1.0
+
+    return None, 0.0
+
+
+
 def filter_target_candidates(
     text: str,
     target_map: dict[str, dict[str, Any]],
@@ -275,13 +357,14 @@ class LayaConversationEntity(ConversationEntity):
             return self._build_result(user_input, self._get_text(lang, "not_found"))
 
         # Intelligent candidate filtering to stay safely under Laya head_max_len=256
-        target_names = self._filter_target_candidates(query_text, target_map, MAX_TARGET_CANDIDATES)
+        normalized_input = _normalize_lithuanian_phonetics(query_text)
+        target_names = self._filter_target_candidates(normalized_input, target_map, MAX_TARGET_CANDIDATES)
         if len(target_map) > MAX_TARGET_CANDIDATES:
             _LOGGER.debug(
                 "Filtered %d target candidates down to %d for '%s'",
                 len(target_map),
                 len(target_names),
-                query_text,
+                normalized_input,
             )
 
         # 2. Build action criteria with clear descriptions for Laya
@@ -296,7 +379,7 @@ class LayaConversationEntity(ConversationEntity):
             if hierarchical_routing and area_map:
                 action_choice, target_choice, target_map, resolved_area = (
                     await self._async_process_hierarchical(
-                        text=query_text,
+                        text=normalized_input,
                         action_criteria=action_criteria,
                         target_map=target_map,
                         area_map=area_map,
@@ -306,7 +389,7 @@ class LayaConversationEntity(ConversationEntity):
                 )
             else:
                 decision = await self.client.decide(
-                    command=query_text,
+                    command=normalized_input,
                     action_criteria=action_criteria,
                     target_criteria=target_names,
                 )
@@ -346,36 +429,25 @@ class LayaConversationEntity(ConversationEntity):
                 target_choice.confidence,
                 resolved_area or "none",
             )
-        # Interrogative check: 'ar ...' or trailing '?' indicates an inquiry, never a command
-        text_lower = text.lower()
-        query_lower = query_text.lower()
-        is_question = (
-            text_lower.startswith("ar ")
-            or text.strip().endswith("?")
-            or text_lower.startswith("is ")
-            or text_lower.startswith("what ")
-            or text_lower.startswith("kokia ")
-            or text_lower.startswith("koks ")
-            or text_lower.startswith("kiek ")
-            or query_lower.startswith("is ")
-            or query_lower.startswith("what ")
-            or query_lower.startswith("are ")
-            or query_lower.strip().endswith("?")
-        )
-        if is_question and action_choice.choice in (
-            "turn_on",
-            "turn_off",
-            "toggle",
-            "open_cover",
-            "close_cover",
-        ):
-            _LOGGER.debug(
-                "Overriding action '%s' to 'query_state' due to interrogative question syntax",
-                action_choice.choice,
-            )
+        # Deterministic action disambiguation: fixes Lithuanian verb antonym confusion
+        # (išjunk vs įjunk, open vs close) and Whisper phonetic slips (atidaryg, isjung)
+        det_action, det_conf = _detect_deterministic_action(text)
+        if not det_action and query_text != text:
+            det_action, det_conf = _detect_deterministic_action(query_text)
+
+        if det_action:
+            if action_choice.choice != det_action:
+                _LOGGER.info(
+                    "Deterministic override: action '%s' (conf=%.2f) -> '%s' (conf=%.2f) for '%s'",
+                    action_choice.choice,
+                    action_choice.confidence,
+                    det_action,
+                    det_conf,
+                    text,
+                )
             action_choice = DecisionChoice(
-                choice="query_state",
-                confidence=max(action_choice.confidence, 0.90),
+                choice=det_action,
+                confidence=max(action_choice.confidence, det_conf),
                 probabilities=action_choice.probabilities,
             )
 

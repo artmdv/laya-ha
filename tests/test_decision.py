@@ -648,6 +648,97 @@ class TestDecisionLogic(unittest.IsolatedAsyncioTestCase):
                     mock_build.assert_called_once()
                     self.assertEqual(mock_build.call_args[0][1], "Išjungta")
 
+    async def test_whisper_phonetic_slip_atidaryg_vartos(self):
+        """Whisper typo 'atidaryg vartos' is normalized and locked to open_cover."""
+        mock_client = MagicMock()
+        decision_mock = MagicMock()
+        decision_mock.action = DecisionChoice(choice="turn_on", confidence=0.55, probabilities={})
+        decision_mock.target = DecisionChoice(choice="Kiemo vartai", confidence=0.98, probabilities={})
+        mock_client.decide = AsyncMock(return_value=decision_mock)
+
+        mock_hass = MagicMock()
+        mock_hass.services.has_service.return_value = True
+        mock_hass.services.async_call = AsyncMock()
+
+        entity = LayaConversationEntity(
+            hass=mock_hass,
+            entry=MagicMock(),
+            client=mock_client,
+        )
+        entity.entry.options = {
+            "try_default_agent_first": False,
+            "translate_to_english": False,
+            "hierarchical_routing": False,
+        }
+
+        user_input = MagicMock()
+        user_input.text = "atidaryg vartos"
+        user_input.language = "lt"
+        user_input.conversation_id = "test_conv"
+        user_input.context = MagicMock()
+
+        with unittest.mock.patch.object(entity, "_build_target_catalog") as mock_cat:
+            mock_cat.return_value = (
+                {"Kiemo vartai": {"type": "entity", "id": "cover.gate", "domain": "cover"}},
+                {},
+            )
+            with unittest.mock.patch.object(entity, "_build_result") as mock_build:
+                res = await entity._async_process_internal(user_input)
+                self.assertEqual(mock_client.decide.call_args.kwargs["command"], "atidaryk vartos")
+                mock_hass.services.async_call.assert_called_with(
+                    "cover",
+                    "open_cover",
+                    service_data={"entity_id": "cover.gate"},
+                    target={"entity_id": "cover.gate"},
+                    blocking=True,
+                )
+                self.assertEqual(mock_build.call_args[0][1], "Atidaroma")
+
+    async def test_isjunk_never_triggers_turn_on(self):
+        """Typo 'isjung' or 'išjunk' overrides any neural confusion to turn_off."""
+        mock_client = MagicMock()
+        decision_mock = MagicMock()
+        decision_mock.action = DecisionChoice(choice="turn_on", confidence=0.94, probabilities={})
+        decision_mock.target = DecisionChoice(choice="Virtuvės šviesa", confidence=0.98, probabilities={})
+        mock_client.decide = AsyncMock(return_value=decision_mock)
+
+        mock_hass = MagicMock()
+        mock_hass.services.has_service.return_value = True
+        mock_hass.services.async_call = AsyncMock()
+
+        entity = LayaConversationEntity(
+            hass=mock_hass,
+            entry=MagicMock(),
+            client=mock_client,
+        )
+        entity.entry.options = {
+            "try_default_agent_first": False,
+            "translate_to_english": False,
+            "hierarchical_routing": False,
+        }
+
+        user_input = MagicMock()
+        user_input.text = "isjung sviesa virtuve"
+        user_input.language = "lt"
+        user_input.conversation_id = "test_conv"
+        user_input.context = MagicMock()
+
+        with unittest.mock.patch.object(entity, "_build_target_catalog") as mock_cat:
+            mock_cat.return_value = (
+                {"Virtuvės šviesa": {"type": "entity", "id": "light.kitchen", "domain": "light"}},
+                {},
+            )
+            with unittest.mock.patch.object(entity, "_build_result") as mock_build:
+                res = await entity._async_process_internal(user_input)
+                mock_hass.services.async_call.assert_called_with(
+                    "homeassistant",
+                    "turn_off",
+                    service_data={"entity_id": "light.kitchen"},
+                    target={"entity_id": "light.kitchen"},
+                    blocking=True,
+                )
+                self.assertEqual(mock_build.call_args[0][1], "Išjungta")
+
 
 if __name__ == "__main__":
     unittest.main()
