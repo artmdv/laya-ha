@@ -177,16 +177,52 @@ def _detect_deterministic_action(text: str) -> tuple[str | None, float]:
 
 
 
+def _nominative_lt(name: str) -> str:
+    """Convert common accusative alias endings to nominative for speech response."""
+    lower = name.lower()
+    if lower.endswith("ą"):
+        # e.g. robotą -> robotas
+        return name[:-1] + "as"
+    if lower.endswith("ę"):
+        # e.g. žoliapjovę -> žoliapjovė
+        return name[:-1] + "ė"
+    if lower.endswith("į"):
+        # e.g. siurblį -> siurblys
+        return name[:-1] + "ys"
+    return name
+
+
 def filter_target_candidates(
     text: str,
     target_map: dict[str, dict[str, Any]],
     max_limit: int = MAX_TARGET_CANDIDATES,
 ) -> list[str]:
     """Intelligently prioritize target candidates to stay safely within Laya head_max_len."""
-    if len(target_map) <= max_limit:
-        return list(target_map.keys())
-
     text_lower = text.lower()
+    is_mow = any(
+        w in text_lower
+        for w in ("pjauna", "pjauk", "pjauti", "žolę", "zole", "žolė", "žoliapjov", "zoliapjov", "mow")
+    )
+    is_vacuum = any(
+        w in text_lower
+        for w in ("siurbk", "siurbia", "siurbti", "siurblys", "dulkes", "dulkių", "vacuum")
+    )
+
+    filtered_map = target_map
+    if is_mow:
+        # Exclude vacuums when the user is explicitly asking about mowing/cutting grass
+        mower_targets = {k: v for k, v in target_map.items() if v.get("domain") != "vacuum"}
+        if any(v.get("domain") == "lawn_mower" for v in mower_targets.values()):
+            filtered_map = mower_targets
+    elif is_vacuum:
+        # Exclude lawn mowers when the user is explicitly asking to vacuum/clean
+        vac_targets = {k: v for k, v in target_map.items() if v.get("domain") != "lawn_mower"}
+        if any(v.get("domain") == "vacuum" for v in vac_targets.values()):
+            filtered_map = vac_targets
+
+    if len(filtered_map) <= max_limit and not is_mow and not is_vacuum:
+        return list(filtered_map.keys())
+
     # Word tokens of length >= 2
     tokens = [t for t in re.findall(r"\w+", text_lower) if len(t) >= 2]
     # Word stems (e.g. 4 chars prefix) to match inflected language forms
@@ -194,7 +230,7 @@ def filter_target_candidates(
 
     scored_targets: list[tuple[float, str]] = []
 
-    for name, meta in target_map.items():
+    for name, meta in filtered_map.items():
         name_lower = name.lower()
         score = 0.0
 
@@ -218,6 +254,12 @@ def filter_target_candidates(
             score += 8.0  # Common actionable home devices
         else:
             score += 2.0  # Diagnostic and background sensors
+
+        # Domain contextual boosts
+        if is_mow and domain == "lawn_mower":
+            score += 60.0
+        elif is_vacuum and domain == "vacuum":
+            score += 60.0
 
         # 2. Text matching bonuses
         if name_lower in text_lower:
@@ -521,6 +563,40 @@ class LayaConversationEntity(ConversationEntity):
             debug_card = f"{debug_card_base}\nStatus: Target not found in catalog ({target_name})" if debug_card_base else None
             return self._build_result(user_input, self._get_text(lang, "not_found"), debug_card=debug_card)
 
+        # Cross-domain safety guard: redirect mower <-> vacuum if user explicitly mentions mowing or vacuuming
+        text_lower = text.lower()
+        is_mow_cmd = any(
+            w in text_lower
+            for w in ("pjauna", "pjauk", "pjauti", "žolę", "zole", "žolė", "žoliapjov", "zoliapjov", "mow")
+        )
+        is_vac_cmd = any(
+            w in text_lower
+            for w in ("siurbk", "siurbia", "siurbti", "siurblys", "dulkes", "dulkių", "vacuum")
+        )
+
+        if is_mow_cmd and resolved_target.get("domain") == "vacuum":
+            for t_name, t_meta in target_map.items():
+                if t_meta.get("domain") == "lawn_mower":
+                    _LOGGER.info(
+                        "Redirecting mowing command from vacuum target '%s' to lawn_mower '%s'",
+                        target_name,
+                        t_name,
+                    )
+                    target_name = t_name
+                    resolved_target = t_meta
+                    break
+        elif is_vac_cmd and resolved_target.get("domain") == "lawn_mower":
+            for t_name, t_meta in target_map.items():
+                if t_meta.get("domain") == "vacuum":
+                    _LOGGER.info(
+                        "Redirecting vacuum command from lawn_mower target '%s' to vacuum '%s'",
+                        target_name,
+                        t_name,
+                    )
+                    target_name = t_name
+                    resolved_target = t_meta
+                    break
+
         # Validate domain compatibility (e.g. avoid vacuum.start on a switch entity)
         compatible_domains = ACTION_COMPATIBLE_DOMAINS.get(action_name)
         if (
@@ -758,7 +834,7 @@ class LayaConversationEntity(ConversationEntity):
             area_choice.choice
             and area_choice.choice != "none"
             and area_choice.choice in name_to_area_id
-            and area_choice.confidence >= 0.25
+            and area_choice.confidence >= 0.60
         ):
             chosen_area_name = area_choice.choice
 
@@ -804,19 +880,29 @@ class LayaConversationEntity(ConversationEntity):
                     target_choice.choice,
                     target_choice.confidence,
                 )
-                return action_choice, target_choice, area_entities, chosen_area_name
-            elif len(area_entities) == 1:
-                single_target = list(area_entities.keys())[0]
-                return (
-                    action_choice,
-                    DecisionChoice(
-                        choice=single_target,
-                        confidence=area_choice.confidence,
-                        probabilities={},
-                    ),
-                    area_entities,
+                if target_choice.confidence >= confidence_threshold:
+                    return action_choice, target_choice, area_entities, chosen_area_name
+
+                _LOGGER.info(
+                    "Hierarchical Step 2 in '%s' had low confidence (%.2f < %.2f) for '%s' - falling back to global catalog",
                     chosen_area_name,
+                    target_choice.confidence,
+                    confidence_threshold,
+                    text,
                 )
+            elif len(area_entities) == 1:
+                if area_choice.confidence >= confidence_threshold:
+                    single_target = list(area_entities.keys())[0]
+                    return (
+                        action_choice,
+                        DecisionChoice(
+                            choice=single_target,
+                            confidence=area_choice.confidence,
+                            probabilities={},
+                        ),
+                        area_entities,
+                        chosen_area_name,
+                    )
 
         # Fallback to direct candidate list if area is 'none' or confidence is low
         fallback_targets = self._filter_target_candidates(text, target_map, MAX_TARGET_CANDIDATES)
@@ -1058,6 +1144,9 @@ class LayaConversationEntity(ConversationEntity):
         unit = state_obj.attributes.get("unit_of_measurement")
         domain = getattr(state_obj, "domain", None) or state_obj.entity_id.split(".")[0]
         device_class = state_obj.attributes.get("device_class")
+
+        if lang == "lt":
+            target_name = _nominative_lt(target_name)
 
         state_dict = LOCALIZED_STATES.get(lang, LOCALIZED_STATES["en"])
         is_word = state_dict.get("is", "is")

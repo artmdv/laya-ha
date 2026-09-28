@@ -878,6 +878,64 @@ class TestDecisionLogic(unittest.IsolatedAsyncioTestCase):
         res_err = entity._format_state_query_response("Žoliapjovė", mock_mower, "lt")
         self.assertEqual(res_err, "Žoliapjovė: klaida")
 
+    def test_filter_target_candidates_mower_vs_vacuum(self):
+        """When asking about mowing grass, vacuum targets are excluded from candidates."""
+        from custom_components.laya.conversation import filter_target_candidates
+        target_map = {
+            "robotą": {"type": "entity", "id": "vacuum.roborock_s5_max", "domain": "vacuum"},
+            "Žolės robotas": {"type": "entity", "id": "lawn_mower.lidax_ultra_1200", "domain": "lawn_mower"},
+            "Svetainė": {"type": "area", "id": "living_room", "domain": "area"},
+        }
+        candidates = filter_target_candidates("ar robotas pjauna žolę?", target_map)
+        self.assertNotIn("robotą", candidates)
+        self.assertIn("Žolės robotas", candidates)
+
+    def test_nominative_lt_case_normalization(self):
+        """Accusative alias names are converted to nominative for spoken responses."""
+        from custom_components.laya.conversation import _nominative_lt
+        self.assertEqual(_nominative_lt("robotą"), "robotas")
+        self.assertEqual(_nominative_lt("žoliapjovę"), "žoliapjovė")
+        self.assertEqual(_nominative_lt("siurblį"), "siurblys")
+        self.assertEqual(_nominative_lt("Kiemo vartai"), "Kiemo vartai")
+
+        entity = LayaConversationEntity(hass=MagicMock(), entry=MagicMock(), client=MagicMock())
+        mock_vac = MagicMock()
+        mock_vac.domain = "vacuum"
+        mock_vac.state = "docked"
+        mock_vac.attributes = {}
+        res = entity._format_state_query_response("robotą", mock_vac, "lt")
+        self.assertTrue(res.startswith("robotas yra"), f"Expected nominative, got: {res}")
+
+    async def test_hierarchical_step2_low_confidence_fallback(self):
+        """If step 2 inside an area has low confidence, it falls back to the whole home."""
+        mock_client = MagicMock()
+        mock_client.query = AsyncMock()
+        mock_client.query.side_effect = [
+            {"action": DecisionChoice("query_state", 1.0, {}), "area": DecisionChoice("Living Room", 0.65, {})},
+            {"target": DecisionChoice("Living Room", 0.18, {})},
+            {"target": DecisionChoice("Žoliapjovė", 0.95, {})},
+        ]
+
+        target_map = {
+            "Living Room Light": {"type": "entity", "id": "light.lr", "domain": "light"},
+            "Žoliapjovė": {"type": "entity", "id": "lawn_mower.lidax", "domain": "lawn_mower"},
+        }
+        area_map = {"living_room": "Living Room", "garden": "In Garden"}
+
+        entity = LayaConversationEntity(hass=MagicMock(), entry=MagicMock(), client=mock_client)
+        with unittest.mock.patch.object(entity, "_get_entities_in_area", return_value={"Living Room Light": target_map["Living Room Light"]}):
+            action_res, target_res, _, chosen_area = await entity._async_process_hierarchical(
+                text="ar žoliapjovė pjauna?",
+                action_criteria={"query_state": "query state"},
+                target_map=target_map,
+                area_map=area_map,
+                exposed_domains=["light", "lawn_mower"],
+                confidence_threshold=0.50,
+            )
+            self.assertEqual(action_res.choice, "query_state")
+            self.assertEqual(target_res.choice, "Žoliapjovė")
+            self.assertEqual(target_res.confidence, 0.95)
+
 
 if __name__ == "__main__":
     unittest.main()
