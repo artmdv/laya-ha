@@ -195,14 +195,14 @@ class LayaClient:
         self,
         command: str,
         action_criteria: dict[str, str] | list[str],
-        target_criteria: list[str],
+        target_criteria: list[str] | dict[str, str],
     ) -> LayaDecision:
         """Send a natural language voice command to Laya for System-1 classification.
 
         Args:
             command: The transcribed user sentence (e.g. 'turn off living room light')
             action_criteria: Available actions (keys or dict of action->description)
-            target_criteria: Available device/area target names
+            target_criteria: Available device/area target names or dict of target->description
 
         Returns:
             LayaDecision with parsed action and target choices

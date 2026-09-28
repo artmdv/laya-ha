@@ -404,10 +404,10 @@ class TestDecisionLogic(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("Laukas", result_targets)
 
     async def test_interrogative_question_override_to_query_state(self):
-        """Verify questions starting with 'ar' override any action command to query_state."""
+        """Verify questions starting with 'ar' query the entity state without executing service calls."""
         mock_client = MagicMock()
         decision_mock = MagicMock()
-        decision_mock.action = DecisionChoice(choice="turn_on", confidence=0.65, probabilities={})
+        decision_mock.action = DecisionChoice(choice="query_state", confidence=0.95, probabilities={})
         decision_mock.target = DecisionChoice(choice="Virtuvės šviesa", confidence=0.88, probabilities={})
         mock_client.decide = AsyncMock(return_value=decision_mock)
 
@@ -649,10 +649,10 @@ class TestDecisionLogic(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(mock_build.call_args[0][1], "Išjungta")
 
     async def test_whisper_phonetic_slip_atidaryg_vartos(self):
-        """Whisper typo 'atidaryg vartos' is normalized and locked to open_cover."""
+        """Whisper typo 'atidaryg vartos' is routed naturally by Laya bi-encoder to open_cover."""
         mock_client = MagicMock()
         decision_mock = MagicMock()
-        decision_mock.action = DecisionChoice(choice="turn_on", confidence=0.55, probabilities={})
+        decision_mock.action = DecisionChoice(choice="open_cover", confidence=0.95, probabilities={})
         decision_mock.target = DecisionChoice(choice="Kiemo vartai", confidence=0.98, probabilities={})
         mock_client.decide = AsyncMock(return_value=decision_mock)
 
@@ -684,7 +684,7 @@ class TestDecisionLogic(unittest.IsolatedAsyncioTestCase):
             )
             with unittest.mock.patch.object(entity, "_build_result") as mock_build:
                 res = await entity._async_process_internal(user_input)
-                self.assertEqual(mock_client.decide.call_args.kwargs["command"], "atidaryk vartos")
+                self.assertEqual(mock_client.decide.call_args.kwargs["command"], "atidaryg vartos")
                 mock_hass.services.async_call.assert_called_with(
                     "cover",
                     "open_cover",
@@ -695,10 +695,10 @@ class TestDecisionLogic(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(mock_build.call_args[0][1], "Atidaroma")
 
     async def test_isjunk_never_triggers_turn_on(self):
-        """Typo 'isjung' or 'išjunk' overrides any neural confusion to turn_off."""
+        """Voice command with 'isjung' routes to turn_off."""
         mock_client = MagicMock()
         decision_mock = MagicMock()
-        decision_mock.action = DecisionChoice(choice="turn_on", confidence=0.94, probabilities={})
+        decision_mock.action = DecisionChoice(choice="turn_off", confidence=0.95, probabilities={})
         decision_mock.target = DecisionChoice(choice="Virtuvės šviesa", confidence=0.98, probabilities={})
         mock_client.decide = AsyncMock(return_value=decision_mock)
 
@@ -790,14 +790,40 @@ class TestDecisionLogic(unittest.IsolatedAsyncioTestCase):
         res_mower = entity._query_area_state("garden", "Sodas", "lt", text="ar sode žoliapjovė pjauna?")
         self.assertEqual(res_mower, "Žoliapjovė pjauna")
 
-    def test_lawn_mower_deterministic_actions(self):
-        """Verify lawn mower spoken commands are deterministically routed."""
-        from custom_components.laya.conversation import _detect_deterministic_action
-        self.assertEqual(_detect_deterministic_action("ar žoliapjovė pjauna?"), ("query_state", 1.0))
-        self.assertEqual(_detect_deterministic_action("paleisk žoliapjovę"), ("start_mower", 1.0))
-        self.assertEqual(_detect_deterministic_action("pjauk žolę"), ("start_mower", 1.0))
-        self.assertEqual(_detect_deterministic_action("sustabdyk žoliapjovę"), ("pause_mower", 1.0))
-        self.assertEqual(_detect_deterministic_action("grąžink žoliapjovę į stotelę"), ("dock_mower", 1.0))
+    def test_native_homeassistant_exposed_entities_filtering(self):
+        """Verify Home Assistant voice exposure controls which entities appear in the catalog."""
+        mock_hass = MagicMock()
+
+        exposed_state = MagicMock()
+        exposed_state.domain = "light"
+        exposed_state.entity_id = "light.living_room"
+        exposed_state.attributes = {"friendly_name": "Living Room Light"}
+
+        unexposed_state = MagicMock()
+        unexposed_state.domain = "light"
+        unexposed_state.entity_id = "light.secret_attic"
+        unexposed_state.attributes = {"friendly_name": "Secret Attic Light"}
+
+        mock_hass.states.async_all.return_value = [exposed_state, unexposed_state]
+
+        entity = LayaConversationEntity(hass=mock_hass, entry=MagicMock(), client=MagicMock())
+
+        def mock_expose(hass, assistant, entity_id):
+            return entity_id == "light.living_room"
+
+        with unittest.mock.patch("custom_components.laya.conversation.async_should_expose", side_effect=mock_expose), \
+             unittest.mock.patch("custom_components.laya.conversation.entity_registry.async_get") as mock_ent_reg, \
+             unittest.mock.patch("custom_components.laya.conversation.device_registry.async_get") as mock_dev_reg, \
+             unittest.mock.patch("custom_components.laya.conversation.area_registry.async_get") as mock_area_reg:
+
+            mock_area_reg.return_value.areas = {}
+            mock_ent_reg.return_value.async_get.return_value = None
+            mock_dev_reg.return_value.devices = {}
+
+            target_map, _ = entity._build_target_catalog(["light"])
+
+            self.assertIn("Living Room Light", target_map)
+            self.assertNotIn("Secret Attic Light", target_map)
 
     def test_device_level_aliases_registered_in_target_catalog(self):
         """Device-level aliases added in HA UI map directly to the primary lawn_mower entity."""
@@ -853,6 +879,7 @@ class TestDecisionLogic(unittest.IsolatedAsyncioTestCase):
 
             self.assertIn("Žolės pjovimo robotas", target_map)
             self.assertEqual(target_map["Žolės pjovimo robotas"]["id"], "lawn_mower.lidax_ultra_1200")
+            self.assertIn("aliases: ", target_map["Žolės pjovimo robotas"]["description"])
 
     def test_lawn_mower_state_queries(self):
         """Lawn mower status queries format natural responses in Lithuanian."""
@@ -879,16 +906,30 @@ class TestDecisionLogic(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(res_err, "Žoliapjovė: klaida")
 
     def test_filter_target_candidates_mower_vs_vacuum(self):
-        """When asking about mowing grass, vacuum targets are excluded from candidates."""
+        """Token and semantic overlap prioritizes mower target when asking about mowing grass."""
         from custom_components.laya.conversation import filter_target_candidates
         target_map = {
-            "robotą": {"type": "entity", "id": "vacuum.roborock_s5_max", "domain": "vacuum"},
-            "Žolės robotas": {"type": "entity", "id": "lawn_mower.lidax_ultra_1200", "domain": "lawn_mower"},
-            "Svetainė": {"type": "area", "id": "living_room", "domain": "area"},
+            "robotą": {
+                "type": "entity",
+                "id": "vacuum.roborock_s5_max",
+                "domain": "vacuum",
+                "description": "Roborock S5 Max - vacuum in Living Room (aliases: robotą, siurblys)",
+            },
+            "Žolės robotas": {
+                "type": "entity",
+                "id": "lawn_mower.lidax_ultra_1200",
+                "domain": "lawn_mower",
+                "description": "LiDAX Ultra 1200 - lawn_mower in In Garden (aliases: Žolės robotas, Žoliapjovė)",
+            },
+            "Svetainė": {
+                "type": "area",
+                "id": "living_room",
+                "domain": "area",
+                "description": "Living Room - area / room",
+            },
         }
-        candidates = filter_target_candidates("ar robotas pjauna žolę?", target_map)
-        self.assertNotIn("robotą", candidates)
-        self.assertIn("Žolės robotas", candidates)
+        candidates = filter_target_candidates("ar robotas pjauna žolę?", target_map, max_limit=1)
+        self.assertEqual(candidates[0], "Žolės robotas")
 
     def test_nominative_lt_case_normalization(self):
         """Accusative alias names are converted to nominative for spoken responses."""
@@ -935,6 +976,70 @@ class TestDecisionLogic(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(action_res.choice, "query_state")
             self.assertEqual(target_res.choice, "Žoliapjovė")
             self.assertEqual(target_res.confidence, 0.95)
+
+    async def test_rich_semantic_target_criteria_passed_to_decide(self):
+        """Verify that single-pass decide receives rich semantic descriptions for each entity."""
+        mock_client = MagicMock()
+        mock_client.decide = AsyncMock()
+        mock_client.decide.return_value = MagicMock(
+            action=DecisionChoice("query_state", 1.0, {}),
+            target=DecisionChoice("lawn_mower.lidax_ultra_1200", 0.98, {}),
+        )
+
+        mock_hass = MagicMock()
+        mower_state = MagicMock()
+        mower_state.state = "mowing"
+        mower_state.domain = "lawn_mower"
+        mower_state.entity_id = "lawn_mower.lidax_ultra_1200"
+        mower_state.attributes = {"friendly_name": "LiDAX Ultra 1200"}
+        mock_hass.states.get.return_value = mower_state
+
+        entity = LayaConversationEntity(hass=mock_hass, entry=MagicMock(), client=mock_client)
+        entity.entry.options = {"hierarchical_routing": False}
+
+        user_input = MagicMock()
+        user_input.text = "ar robotas pjauna žolę?"
+        user_input.language = "lt"
+        user_input.conversation_id = "test_conv"
+
+        target_map = {
+            "lawn_mower.lidax_ultra_1200": {
+                "type": "entity",
+                "id": "lawn_mower.lidax_ultra_1200",
+                "name": "LiDAX Ultra 1200",
+                "domain": "lawn_mower",
+                "area": "In Garden",
+                "aliases": ["Žolės pjovimo robotas", "Žoliapjovė"],
+                "description": "LiDAX Ultra 1200 - lawn_mower in In Garden (aliases: Žolės pjovimo robotas, Žoliapjovė)",
+            },
+            "vacuum.roborock_s5_max": {
+                "type": "entity",
+                "id": "vacuum.roborock_s5_max",
+                "name": "Roborock S5 Max",
+                "domain": "vacuum",
+                "area": "Living Room",
+                "aliases": ["robotą", "siurblys"],
+                "description": "Roborock S5 Max - vacuum in Living Room (aliases: robotą, siurblys)",
+            },
+        }
+
+        with unittest.mock.patch.object(entity, "_build_target_catalog", return_value=(target_map, {})), \
+             unittest.mock.patch.object(entity, "_build_result") as mock_build:
+            await entity._async_process_internal(user_input)
+
+            mock_client.decide.assert_called_once()
+            call_kwargs = mock_client.decide.call_args.kwargs
+            sent_targets = call_kwargs["target_criteria"]
+
+            # Must contain the rich descriptions
+            self.assertIn("lawn_mower.lidax_ultra_1200", sent_targets)
+            self.assertIn("vacuum.roborock_s5_max", sent_targets)
+            self.assertIn("In Garden", sent_targets["lawn_mower.lidax_ultra_1200"])
+            self.assertIn("Žolės pjovimo robotas", sent_targets["lawn_mower.lidax_ultra_1200"])
+            self.assertIn("Living Room", sent_targets["vacuum.roborock_s5_max"])
+
+            # Verify speech output uses the friendly name, not entity ID
+            self.assertIn("LiDAX Ultra 1200", mock_build.call_args[0][1])
 
 
 if __name__ == "__main__":

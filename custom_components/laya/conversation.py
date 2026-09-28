@@ -60,6 +60,11 @@ from .const import (
 )
 from .translator import async_translate_to_english
 
+try:
+    from homeassistant.components.homeassistant.exposed_entities import async_should_expose
+except ImportError:
+    async_should_expose = None
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -72,109 +77,6 @@ def _safe_str(val: Any) -> str:
     if hasattr(val, "name") and isinstance(val.name, str):
         return val.name.strip()
     return str(val).strip()
-
-
-def _normalize_lithuanian_phonetics(text: str) -> str:
-    """Normalize common Whisper phonetic slips and typos in Lithuanian smart home commands."""
-    t = text.lower()
-    # Voicing slips at word end for imperative verbs (e.g. atidaryg -> atidaryk, isjung -> isjunk)
-    t = re.sub(r"\b(atidary|uždary|uzdary)g\b", r"\1k", t)
-    t = re.sub(r"\b(i[šs]jun|[įi]jun)g\b", r"\1k", t)
-    t = re.sub(r"\b(užgesin|uzgesin)g\b", r"\1k", t)
-    return t
-
-
-def _detect_deterministic_action(text: str) -> tuple[str | None, float]:
-    """Detect unambiguous action intent from Lithuanian and English verb stems."""
-    text_clean = _normalize_lithuanian_phonetics(text.lower())
-    tokens = re.findall(r"\w+", text_clean)
-
-    # 1. Questions / Inquiries
-    if (
-        text_clean.startswith("ar ")
-        or text.strip().endswith("?")
-        or any(text_clean.startswith(q) for q in ("kokia ", "koks ", "kiek ", "what ", "is ", "how "))
-        or any(w in tokens for w in ("temperatūra", "temperatura", "būsena", "busena"))
-    ):
-        return "query_state", 1.0
-
-    # 2. Lawnmower
-    if any(
-        w in tokens
-        for w in (
-            "žoliapjovė",
-            "zoliapjove",
-            "žoliapjovę",
-            "žoliapjovės",
-            "zoliapjoves",
-            "žolę",
-            "zole",
-            "mower",
-        )
-    ):
-        if any(w in tokens for w in ("stotel", "stotelę", "namo", "grįžk", "grizk", "baze", "dock")):
-            return "dock_mower", 1.0
-        if any(w in tokens for w in ("stop", "sustabdyk", "pristabdyk", "pause")):
-            return "pause_mower", 1.0
-        if any(w in tokens for w in ("pjauk", "paleisk", "start", "pradėk", "pradek", "pjauna")):
-            return "start_mower", 1.0
-
-    # 3. Vacuum
-    if any(w in tokens for w in ("siurbk", "siurblys", "siurblį", "siurbli")):
-        if any(w in tokens for w in ("stotel", "namo", "grįžk", "grizk", "baze")):
-            return "dock_vacuum", 1.0
-        if any(w in tokens for w in ("stop", "sustabdyk")):
-            return "stop_vacuum", 1.0
-        return "start_vacuum", 1.0
-
-    # 4. Turn off (explicit off verbs)
-    OFF_STEMS = (
-        "išjunk", "isjunk", "išjungi", "isjungi", "išjungti", "isjungti",
-        "išjunkite", "isjunkite", "užgesink", "uzgesink", "užgesinti",
-        "uzgesinti", "užgesinkite", "uzgesinkite", "atjunk", "atjunkite",
-        "turn off", "switch off", "power off"
-    )
-    for stem in OFF_STEMS:
-        if stem in text_clean:
-            return "turn_off", 1.0
-
-    # 5. Turn on (explicit on verbs)
-    ON_STEMS = (
-        "įjunk", "ijunk", "įjungi", "ijungi", "įjungti", "ijungti",
-        "įjunkite", "ijunkite", "uždek", "uzdek", "uždegti", "uzdegti",
-        "uždekite", "uzdekite", "paleisk", "paleisti", "paleiskite",
-        "turn on", "switch on", "power on"
-    )
-    for stem in ON_STEMS:
-        if stem in text_clean:
-            return "turn_on", 1.0
-
-    # 6. Open cover / gate / blinds
-    OPEN_STEMS = (
-        "atidaryk", "atidarykite", "atidaryti", "atidarik",
-        "atverk", "atverkite", "pakelk", "pakelkite", "open "
-    )
-    for stem in OPEN_STEMS:
-        if stem in text_clean:
-            return "open_cover", 1.0
-
-    # 7. Close cover / gate / blinds
-    CLOSE_STEMS = (
-        "uždaryk", "uzdaryk", "uždarykite", "uzdarykite", "uždaryti", "uzdaryti",
-        "užverk", "uzverk", "nuleisk", "nuleiskite", "close "
-    )
-    for stem in CLOSE_STEMS:
-        if stem in text_clean:
-            return "close_cover", 1.0
-
-    # 8. Toggle
-    TOGGLE_STEMS = ("perjunk", "perjunkite", "toggle")
-    for stem in TOGGLE_STEMS:
-        if stem in text_clean:
-            return "toggle", 1.0
-
-    return None, 0.0
-
 
 
 def _nominative_lt(name: str) -> str:
@@ -197,49 +99,27 @@ def filter_target_candidates(
     target_map: dict[str, dict[str, Any]],
     max_limit: int = MAX_TARGET_CANDIDATES,
 ) -> list[str]:
-    """Intelligently prioritize target candidates to stay safely within Laya head_max_len."""
+    """Prioritize target candidates via generic token-overlap to stay within Laya head_max_len."""
+    if len(target_map) <= max_limit:
+        return list(target_map.keys())
+
     text_lower = text.lower()
-    is_mow = any(
-        w in text_lower
-        for w in ("pjauna", "pjauk", "pjauti", "žolę", "zole", "žolė", "žoliapjov", "zoliapjov", "mow")
-    )
-    is_vacuum = any(
-        w in text_lower
-        for w in ("siurbk", "siurbia", "siurbti", "siurblys", "dulkes", "dulkių", "vacuum")
-    )
-
-    filtered_map = target_map
-    if is_mow:
-        # Exclude vacuums when the user is explicitly asking about mowing/cutting grass
-        mower_targets = {k: v for k, v in target_map.items() if v.get("domain") != "vacuum"}
-        if any(v.get("domain") == "lawn_mower" for v in mower_targets.values()):
-            filtered_map = mower_targets
-    elif is_vacuum:
-        # Exclude lawn mowers when the user is explicitly asking to vacuum/clean
-        vac_targets = {k: v for k, v in target_map.items() if v.get("domain") != "lawn_mower"}
-        if any(v.get("domain") == "vacuum" for v in vac_targets.values()):
-            filtered_map = vac_targets
-
-    if len(filtered_map) <= max_limit and not is_mow and not is_vacuum:
-        return list(filtered_map.keys())
-
-    # Word tokens of length >= 2
     tokens = [t for t in re.findall(r"\w+", text_lower) if len(t) >= 2]
-    # Word stems (e.g. 4 chars prefix) to match inflected language forms
     stems = [t[:4] for t in tokens if len(t) >= 4]
 
     scored_targets: list[tuple[float, str]] = []
 
-    for name, meta in filtered_map.items():
+    for name, meta in target_map.items():
         name_lower = name.lower()
+        desc_lower = meta.get("description", "").lower()
         score = 0.0
 
         target_type = meta.get("type")
         domain = meta.get("domain", "")
 
-        # 1. Base architectural weights
+        # 1. Base weights for actionable home components
         if target_type == "area":
-            score += 15.0  # Areas are primary room targets
+            score += 15.0
         elif domain in (
             "light",
             "switch",
@@ -251,17 +131,11 @@ def filter_target_candidates(
             "lock",
             "media_player",
         ):
-            score += 8.0  # Common actionable home devices
+            score += 8.0
         else:
-            score += 2.0  # Diagnostic and background sensors
+            score += 2.0
 
-        # Domain contextual boosts
-        if is_mow and domain == "lawn_mower":
-            score += 60.0
-        elif is_vacuum and domain == "vacuum":
-            score += 60.0
-
-        # 2. Text matching bonuses
+        # 2. Text and description token matching
         if name_lower in text_lower:
             score += 50.0
         else:
@@ -272,14 +146,21 @@ def filter_target_candidates(
                         score += 30.0
                     elif len(token) >= 3 and (token in nw or nw in token):
                         score += 15.0
-
             for stem in stems:
                 if stem in name_lower:
                     score += 10.0
 
+        # Check overlap against rich description (covers aliases, domain, area)
+        if desc_lower:
+            for token in tokens:
+                if token in desc_lower:
+                    score += 15.0
+            for stem in stems:
+                if stem in desc_lower:
+                    score += 5.0
+
         scored_targets.append((score, name))
 
-    # Sort descending by score, tie-break by name for deterministic order
     scored_targets.sort(key=lambda x: (-x[0], x[1]))
     return [name for _, name in scored_targets[:max_limit]]
 
@@ -422,15 +303,34 @@ class LayaConversationEntity(ConversationEntity):
             _LOGGER.warning("Laya: No exposed entities found for domains: %s", exposed_domains)
             return self._build_result(user_input, self._get_text(lang, "not_found"))
 
-        # Intelligent candidate filtering to stay safely under Laya head_max_len=256
-        normalized_input = _normalize_lithuanian_phonetics(query_text)
-        target_names = self._filter_target_candidates(normalized_input, target_map, MAX_TARGET_CANDIDATES)
-        if len(target_map) > MAX_TARGET_CANDIDATES:
+        # Build unique target criteria with rich semantic descriptions
+        target_criteria: dict[str, str] = {}
+        for t_info in target_map.values():
+            t_id = t_info.get("id") or t_info.get("name")
+            if t_id and t_id not in target_criteria:
+                target_criteria[t_id] = t_info.get("description") or t_info.get("name", t_id)
+
+        # Candidate filtering if catalog exceeds Laya head_max_len
+        if len(target_criteria) > MAX_TARGET_CANDIDATES:
+            filtered_target_ids = self._filter_target_candidates(
+                query_text,
+                {
+                    tid: {
+                        "type": target_map.get(tid, {}).get("type", "entity"),
+                        "domain": target_map.get(tid, {}).get("domain", ""),
+                        "description": desc,
+                    }
+                    for tid, desc in target_criteria.items()
+                },
+                MAX_TARGET_CANDIDATES,
+            )
+            target_criteria = {
+                tid: target_criteria[tid] for tid in filtered_target_ids if tid in target_criteria
+            }
             _LOGGER.debug(
-                "Filtered %d target candidates down to %d for '%s'",
-                len(target_map),
-                len(target_names),
-                normalized_input,
+                "Filtered target candidates down to %d for '%s'",
+                len(target_criteria),
+                query_text,
             )
 
         # 2. Build action criteria with clear descriptions for Laya
@@ -439,13 +339,13 @@ class LayaConversationEntity(ConversationEntity):
             for action, meta in ACTION_DEFINITIONS.items()
         }
 
-        # 3. Query Laya System-1 decision engine (Hierarchical 2-step or direct)
+        # 3. Query Laya System-1 decision engine (Hierarchical 2-step or direct single-pass)
         resolved_area = None
         try:
             if hierarchical_routing and area_map:
                 action_choice, target_choice, target_map, resolved_area = (
                     await self._async_process_hierarchical(
-                        text=normalized_input,
+                        text=query_text,
                         action_criteria=action_criteria,
                         target_map=target_map,
                         area_map=area_map,
@@ -455,9 +355,9 @@ class LayaConversationEntity(ConversationEntity):
                 )
             else:
                 decision = await self.client.decide(
-                    command=normalized_input,
+                    command=query_text,
                     action_criteria=action_criteria,
-                    target_criteria=target_names,
+                    target_criteria=target_criteria,
                 )
                 action_choice = decision.action
                 target_choice = decision.target
@@ -494,27 +394,6 @@ class LayaConversationEntity(ConversationEntity):
                 target_choice.choice,
                 target_choice.confidence,
                 resolved_area or "none",
-            )
-        # Deterministic action disambiguation: fixes Lithuanian verb antonym confusion
-        # (išjunk vs įjunk, open vs close) and Whisper phonetic slips (atidaryg, isjung)
-        det_action, det_conf = _detect_deterministic_action(text)
-        if not det_action and query_text != text:
-            det_action, det_conf = _detect_deterministic_action(query_text)
-
-        if det_action:
-            if action_choice.choice != det_action:
-                _LOGGER.info(
-                    "Deterministic override: action '%s' (conf=%.2f) -> '%s' (conf=%.2f) for '%s'",
-                    action_choice.choice,
-                    action_choice.confidence,
-                    det_action,
-                    det_conf,
-                    text,
-                )
-            action_choice = DecisionChoice(
-                choice=det_action,
-                confidence=max(action_choice.confidence, det_conf),
-                probabilities=action_choice.probabilities,
             )
 
         debug_lines = []
@@ -563,40 +442,6 @@ class LayaConversationEntity(ConversationEntity):
             debug_card = f"{debug_card_base}\nStatus: Target not found in catalog ({target_name})" if debug_card_base else None
             return self._build_result(user_input, self._get_text(lang, "not_found"), debug_card=debug_card)
 
-        # Cross-domain safety guard: redirect mower <-> vacuum if user explicitly mentions mowing or vacuuming
-        text_lower = text.lower()
-        is_mow_cmd = any(
-            w in text_lower
-            for w in ("pjauna", "pjauk", "pjauti", "žolę", "zole", "žolė", "žoliapjov", "zoliapjov", "mow")
-        )
-        is_vac_cmd = any(
-            w in text_lower
-            for w in ("siurbk", "siurbia", "siurbti", "siurblys", "dulkes", "dulkių", "vacuum")
-        )
-
-        if is_mow_cmd and resolved_target.get("domain") == "vacuum":
-            for t_name, t_meta in target_map.items():
-                if t_meta.get("domain") == "lawn_mower":
-                    _LOGGER.info(
-                        "Redirecting mowing command from vacuum target '%s' to lawn_mower '%s'",
-                        target_name,
-                        t_name,
-                    )
-                    target_name = t_name
-                    resolved_target = t_meta
-                    break
-        elif is_vac_cmd and resolved_target.get("domain") == "lawn_mower":
-            for t_name, t_meta in target_map.items():
-                if t_meta.get("domain") == "vacuum":
-                    _LOGGER.info(
-                        "Redirecting vacuum command from lawn_mower target '%s' to vacuum '%s'",
-                        target_name,
-                        t_name,
-                    )
-                    target_name = t_name
-                    resolved_target = t_meta
-                    break
-
         # Validate domain compatibility (e.g. avoid vacuum.start on a switch entity)
         compatible_domains = ACTION_COMPATIBLE_DOMAINS.get(action_name)
         if (
@@ -632,8 +477,9 @@ class LayaConversationEntity(ConversationEntity):
                 if state_obj is None:
                     debug_card = f"{debug_card_base}\nTarget ID: {entity_id}\nStatus: State object missing" if debug_card_base else None
                     return self._build_result(user_input, self._get_text(lang, "not_found"), resolved_target, debug_card=debug_card)
+                target_display_name = resolved_target.get("name") or target_name
                 speech = self._format_state_query_response(
-                    target_name=target_name,
+                    target_name=target_display_name,
                     state_obj=state_obj,
                     lang=lang,
                 )
@@ -656,45 +502,18 @@ class LayaConversationEntity(ConversationEntity):
             if resolved_target["type"] == "area":
                 area_id = resolved_target["id"]
                 # Determine safe target domain for area command to prevent turning on appliances/dishwashers
-                target_domain = "light"  # Default safe domain for room commands
-                text_lower = text.lower()
-                if any(w in text_lower for w in ("fan", "ventiliat", "vėdinim")):
-                    target_domain = "fan"
-                elif any(w in text_lower for w in ("cover", "užuolaid", "rolet", "žaliuz", "blind", "curtain", "shutter")):
-                    target_domain = "cover"
-                elif any(w in text_lower for w in ("switch", "socket", "rozet", "kištuk", "plug")):
-                    target_domain = "switch"
-                elif any(w in text_lower for w in ("mower", "žoliapjov", "zoliapjov", "žol", "zol")):
-                    target_domain = "lawn_mower"
-                elif any(w in text_lower for w in ("vacuum", "siurbl")):
-                    target_domain = "vacuum"
-                elif any(w in text_lower for w in ("media", "muzik", "grotuv", "televizor", "tv", "player")):
-                    target_domain = "media_player"
-
-                if target_domain == "lawn_mower":
-                    if service_name in ("turn_on", "start"):
-                        target_service = "lawn_mower.start_mowing"
-                    elif service_name in ("turn_off", "return_to_base", "dock"):
-                        target_service = "lawn_mower.dock"
-                    elif service_name in ("pause", "stop"):
-                        target_service = "lawn_mower.pause"
-                    else:
-                        target_service = service_full
-                elif service_domain == "homeassistant":
-                    target_service = f"{target_domain}.{service_name}"
+                # For general homeassistant turn_on/turn_off, default safe domain for areas is light
+                if service_domain == "homeassistant":
+                    srv_domain, srv_name = "light", service_name
                 else:
-                    target_service = service_full
+                    srv_domain, srv_name = service_domain, service_name
 
-                srv_domain, srv_name = target_service.split(".", 1)
                 if (
                     hasattr(self.hass, "services")
                     and hasattr(self.hass.services, "has_service")
                     and not self.hass.services.has_service(srv_domain, srv_name)
                 ):
-                    if self.hass.services.has_service("light", service_name):
-                        srv_domain, srv_name = "light", service_name
-                    else:
-                        srv_domain, srv_name = service_domain, service_name
+                    srv_domain, srv_name = service_domain, service_name
 
                 log_msg = f"Executing {srv_domain}.{srv_name} on area '{target_name}' ({area_id})"
                 if debug_logging:
@@ -753,9 +572,10 @@ class LayaConversationEntity(ConversationEntity):
             debug_card = None
 
         # 8. Format user response
+        target_display_name = resolved_target.get("name") or target_name
         speech = self._format_speech_response(
             action_name=action_name,
-            target_name=target_name,
+            target_name=target_display_name,
             lang=lang,
             style=response_style,
         )
@@ -919,12 +739,24 @@ class LayaConversationEntity(ConversationEntity):
         )
         return action_choice, target_choice, target_map, None
 
+    def _is_entity_exposed(
+        self, entity_id: str, domain: str, exposed_domains: list[str]
+    ) -> bool:
+        """Check if an entity is exposed via Home Assistant's native voice assistant exposure."""
+        if async_should_expose is not None:
+            try:
+                return async_should_expose(self.hass, conversation.DOMAIN, entity_id)
+            except Exception:
+                pass
+        return domain in exposed_domains
+
     def _get_entities_in_area(
         self, area_id: str, exposed_domains: list[str]
     ) -> dict[str, dict[str, Any]]:
         """Return all exposed entities belonging to a specific area."""
         ent_reg = entity_registry.async_get(self.hass)
         dev_reg = device_registry.async_get(self.hass)
+        area_reg = area_registry.async_get(self.hass)
 
         dev_area_map: dict[str, str] = {}
         if dev_reg and hasattr(dev_reg, "devices"):
@@ -932,11 +764,17 @@ class LayaConversationEntity(ConversationEntity):
                 if getattr(dev, "area_id", None):
                     dev_area_map[dev.id] = dev.area_id
 
+        area_name = None
+        if area_reg:
+            area_obj = area_reg.async_get_area(area_id) if hasattr(area_reg, "async_get_area") else getattr(area_reg, "areas", {}).get(area_id)
+            if area_obj:
+                area_name = _safe_str(area_obj.name)
+
         area_entities: dict[str, dict[str, Any]] = {}
         device_area_entities: dict[str, list[tuple[str, str]]] = {}
 
         for state in self.hass.states.async_all():
-            if state.domain not in exposed_domains:
+            if not self._is_entity_exposed(state.entity_id, state.domain, exposed_domains):
                 continue
 
             ent_entry = ent_reg.async_get(state.entity_id) if ent_reg else None
@@ -948,27 +786,35 @@ class LayaConversationEntity(ConversationEntity):
                 )
 
             if ent_area_id == area_id:
-                friendly_name = state.attributes.get("friendly_name")
-                name_to_use = _safe_str(friendly_name) or state.entity_id
-                area_entities[name_to_use] = {
-                    "type": "entity",
-                    "id": state.entity_id,
-                    "domain": state.domain,
-                }
-                if dev_id:
-                    device_area_entities.setdefault(dev_id, []).append((state.entity_id, state.domain))
-
+                friendly_name = _safe_str(state.attributes.get("friendly_name")) or state.entity_id
+                aliases: list[str] = []
                 if ent_entry and hasattr(ent_entry, "aliases") and ent_entry.aliases:
                     for alias in ent_entry.aliases:
                         alias_str = _safe_str(alias)
-                        if alias_str:
-                            area_entities[alias_str] = {
-                                "type": "entity",
-                                "id": state.entity_id,
-                                "domain": state.domain,
-                            }
+                        if alias_str and alias_str not in aliases:
+                            aliases.append(alias_str)
 
-        # Associate device-level names and aliases in this area
+                area_part = f" in {area_name}" if area_name else ""
+                alias_part = f" (aliases: {', '.join(aliases)})" if aliases else ""
+                desc = f"{friendly_name} - {state.domain}{area_part}{alias_part}"
+
+                ent_info = {
+                    "type": "entity",
+                    "id": state.entity_id,
+                    "name": friendly_name,
+                    "domain": state.domain,
+                    "area": area_name,
+                    "aliases": aliases,
+                    "description": desc,
+                }
+                area_entities[friendly_name] = ent_info
+                area_entities[state.entity_id] = ent_info
+                for a in aliases:
+                    area_entities[a] = ent_info
+
+                if dev_id:
+                    device_area_entities.setdefault(dev_id, []).append((state.entity_id, state.domain))
+
         PRIMARY_DOMAINS = (
             "lawn_mower",
             "vacuum",
@@ -996,19 +842,26 @@ class LayaConversationEntity(ConversationEntity):
 
                 sorted_entities = sorted(ent_list, key=_domain_rank)
                 primary_entity_id, primary_domain = sorted_entities[0]
+                primary_info = area_entities.get(primary_entity_id)
 
                 dev_name_user = getattr(dev, "name_by_user", None)
                 if dev_name_user:
                     dev_name_str = _safe_str(dev_name_user)
-                    if dev_name_str and dev_name_str not in area_entities:
-                        area_entities[dev_name_str] = {"type": "entity", "id": primary_entity_id, "domain": primary_domain}
+                    if dev_name_str and dev_name_str not in area_entities and primary_info:
+                        area_entities[dev_name_str] = primary_info
 
                 dev_aliases = getattr(dev, "aliases", None)
                 if dev_aliases:
                     for alias in dev_aliases:
                         alias_str = _safe_str(alias)
-                        if alias_str:
-                            area_entities[alias_str] = {"type": "entity", "id": primary_entity_id, "domain": primary_domain}
+                        if alias_str and primary_info:
+                            area_entities[alias_str] = primary_info
+                            if alias_str not in primary_info.get("aliases", []):
+                                primary_info.setdefault("aliases", []).append(alias_str)
+                                # Update description to include new alias
+                                ap = f" in {primary_info.get('area')}" if primary_info.get('area') else ""
+                                al = f" (aliases: {', '.join(primary_info['aliases'])})"
+                                primary_info["description"] = f"{primary_info['name']} - {primary_info['domain']}{ap}{al}"
 
         return area_entities
 
@@ -1024,7 +877,7 @@ class LayaConversationEntity(ConversationEntity):
     def _build_target_catalog(
         self, exposed_domains: list[str]
     ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
-        """Collect all matching device friendly names, device aliases, and registered areas."""
+        """Collect all exposed entities, aliases, and registered areas with rich semantic descriptions."""
         target_map: dict[str, dict[str, Any]] = {}
         area_map: dict[str, str] = {}
 
@@ -1038,46 +891,97 @@ class LayaConversationEntity(ConversationEntity):
 
         for area in areas:
             area_name_clean = _safe_str(area.name)
-            if area_name_clean:
-                area_map[area.id] = area_name_clean
-                target_map[area_name_clean] = {"type": "area", "id": area.id, "domain": "area"}
+            if not area_name_clean:
+                continue
+            area_map[area.id] = area_name_clean
 
-            # Also register area aliases if present
+            area_aliases: list[str] = []
             if hasattr(area, "aliases") and area.aliases:
                 for alias in area.aliases:
                     alias_str = _safe_str(alias)
-                    if alias_str:
-                        target_map[alias_str] = {"type": "area", "id": area.id, "domain": "area"}
+                    if alias_str and alias_str not in area_aliases:
+                        area_aliases.append(alias_str)
 
-        # 2. Add Entities
-        ent_reg = entity_registry.async_get(self.hass)
+            alias_part = f" (aliases: {', '.join(area_aliases)})" if area_aliases else ""
+            area_desc = f"{area_name_clean} - area / room{alias_part}"
+
+            area_info = {
+                "type": "area",
+                "id": area.id,
+                "name": area_name_clean,
+                "domain": "area",
+                "aliases": area_aliases,
+                "description": area_desc,
+            }
+            target_map[area_name_clean] = area_info
+            target_map[area.id] = area_info
+            target_map[f"area.{area.id}"] = area_info
+            for alias_str in area_aliases:
+                target_map[alias_str] = area_info
+
+        # 2. Build device area mapping & device registry lookup
         dev_reg = device_registry.async_get(self.hass)
+        dev_area_map: dict[str, str] = {}
+        if dev_reg and hasattr(dev_reg, "devices"):
+            for dev in dev_reg.devices.values():
+                if getattr(dev, "area_id", None):
+                    dev_area_map[dev.id] = dev.area_id
+
+        # 3. Add Entities
+        ent_reg = entity_registry.async_get(self.hass)
         device_exposed_entities: dict[str, list[tuple[str, str]]] = {}
 
         for state in self.hass.states.async_all():
             domain = state.domain
-            if domain not in exposed_domains:
+            entity_id = state.entity_id
+
+            if not self._is_entity_exposed(entity_id, domain, exposed_domains):
                 continue
 
-            entity_id = state.entity_id
-            friendly_name = state.attributes.get("friendly_name")
-            name_to_use = _safe_str(friendly_name) or entity_id
+            friendly_name = _safe_str(state.attributes.get("friendly_name")) or entity_id
 
-            target_map[name_to_use] = {"type": "entity", "id": entity_id, "domain": domain}
-
-            # Check entity registry for extra aliases and device mapping
             ent_entry = ent_reg.async_get(entity_id) if ent_reg else None
-            if ent_entry:
-                if getattr(ent_entry, "device_id", None):
-                    device_exposed_entities.setdefault(ent_entry.device_id, []).append((entity_id, domain))
+            dev_id = getattr(ent_entry, "device_id", None) if ent_entry else None
 
-                if hasattr(ent_entry, "aliases") and ent_entry.aliases:
-                    for alias in ent_entry.aliases:
-                        alias_str = _safe_str(alias)
-                        if alias_str:
-                            target_map[alias_str] = {"type": "entity", "id": entity_id, "domain": domain}
+            # Get area name from entity or device
+            area_name = None
+            ent_area_id = getattr(ent_entry, "area_id", None) if ent_entry else None
+            if not ent_area_id and dev_id and dev_id in dev_area_map:
+                ent_area_id = dev_area_map[dev_id]
+            if ent_area_id and ent_area_id in area_map:
+                area_name = area_map[ent_area_id]
 
-        # 3. Associate Device-level Aliases and User Names with Primary Entity
+            # Collect entity-level aliases
+            aliases: list[str] = []
+            if ent_entry and hasattr(ent_entry, "aliases") and ent_entry.aliases:
+                for alias in ent_entry.aliases:
+                    alias_str = _safe_str(alias)
+                    if alias_str and alias_str not in aliases:
+                        aliases.append(alias_str)
+
+            if dev_id:
+                device_exposed_entities.setdefault(dev_id, []).append((entity_id, domain))
+
+            area_part = f" in {area_name}" if area_name else ""
+            alias_part = f" (aliases: {', '.join(aliases)})" if aliases else ""
+            description = f"{friendly_name} - {domain}{area_part}{alias_part}"
+
+            entity_info = {
+                "type": "entity",
+                "id": entity_id,
+                "name": friendly_name,
+                "domain": domain,
+                "area": area_name,
+                "aliases": aliases,
+                "description": description,
+            }
+
+            target_map[friendly_name] = entity_info
+            target_map[entity_id] = entity_info
+            for alias_str in aliases:
+                target_map[alias_str] = entity_info
+
+        # 4. Associate Device-level Aliases and User Names with Primary Entity
         PRIMARY_DOMAINS = (
             "lawn_mower",
             "vacuum",
@@ -1105,21 +1009,28 @@ class LayaConversationEntity(ConversationEntity):
 
                 sorted_entities = sorted(ent_list, key=_domain_rank)
                 primary_entity_id, primary_domain = sorted_entities[0]
+                primary_info = target_map.get(primary_entity_id)
 
                 # User-assigned device name
                 dev_name_user = getattr(dev, "name_by_user", None)
                 if dev_name_user:
                     dev_name_str = _safe_str(dev_name_user)
-                    if dev_name_str and dev_name_str not in target_map:
-                        target_map[dev_name_str] = {"type": "entity", "id": primary_entity_id, "domain": primary_domain}
+                    if dev_name_str and dev_name_str not in target_map and primary_info:
+                        target_map[dev_name_str] = primary_info
 
                 # Device-level aliases (e.g. Žolės pjovimo robotas, Žolės robotas, Žoliapjovė)
                 dev_aliases = getattr(dev, "aliases", None)
                 if dev_aliases:
                     for alias in dev_aliases:
                         alias_str = _safe_str(alias)
-                        if alias_str:
-                            target_map[alias_str] = {"type": "entity", "id": primary_entity_id, "domain": primary_domain}
+                        if alias_str and primary_info:
+                            target_map[alias_str] = primary_info
+                            if alias_str not in primary_info.get("aliases", []):
+                                primary_info.setdefault("aliases", []).append(alias_str)
+                                # Update description to include new alias
+                                ap = f" in {primary_info.get('area')}" if primary_info.get('area') else ""
+                                al = f" (aliases: {', '.join(primary_info['aliases'])})"
+                                primary_info["description"] = f"{primary_info['name']} - {primary_info['domain']}{ap}{al}"
 
         return target_map, area_map
 

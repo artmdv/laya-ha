@@ -55,7 +55,7 @@ STYLE_VERBOSE = "verbose"
 DEFAULT_RESPONSE_STYLE = STYLE_CONCISE
 
 CONF_HIERARCHICAL_ROUTING = "hierarchical_routing"
-DEFAULT_HIERARCHICAL_ROUTING = True
+DEFAULT_HIERARCHICAL_ROUTING = False
 
 CONF_DEBUG_LOGGING = "debug_logging"
 DEFAULT_DEBUG_LOGGING = False
@@ -181,7 +181,7 @@ ACTION_DEFINITIONS = {
         "service": "media_player.media_pause",
     },
     "query_state": {
-        "description": "Question asking whether a device or light is on, off, open, closed, or asking about temperature or measurement (klausimas ar įjungta, ar išjungta, ar atidaryta, ar uždaryta, ar šviesa įjungta, kokia temperatūra, koks statusas). Any question starting with 'ar', 'kokia', 'koks'",
+        "description": "Question asking whether a device or light is on, off, open, closed, or asking about temperature, measurement, activity, or status (klausimas ar įjungta, ar išjungta, ar atidaryta, ar uždaryta, ar šviesa įjungta, kokia temperatūra, koks statusas, ar veikia, ar pjauna, ar atidaryti vartai). Any question or inquiry starting with 'ar', 'kokia', 'koks', 'is', 'what'",
         "service": None,
     },
     "no_action": {
