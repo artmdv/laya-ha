@@ -1,4 +1,4 @@
-"""The Laya System-1 Conversation integration."""
+"""The System-1 Conversation integration."""
 
 from __future__ import annotations
 
@@ -9,12 +9,16 @@ from homeassistant.const import CONF_URL, Platform
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
-from .client import LayaClient
+from .client import System1Client
 from .const import (
     CONF_API_KEY,
     CONF_DEBUG_LOGGING,
+    CONF_ENGINE,
+    CONF_MODEL,
     CONF_TIMEOUT,
     DEFAULT_DEBUG_LOGGING,
+    DEFAULT_ENGINE,
+    DEFAULT_MODEL,
     DEFAULT_TIMEOUT,
     DOMAIN,
 )
@@ -25,13 +29,16 @@ PLATFORMS: list[Platform] = [Platform.CONVERSATION]
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """Set up Laya System-1 Conversation from a config entry."""
+    """Set up System-1 Conversation from a config entry."""
     hass.data.setdefault(DOMAIN, {})
 
     base_url = entry.data[CONF_URL]
     api_key = entry.data.get(CONF_API_KEY)
+    engine = entry.options.get(CONF_ENGINE, entry.data.get(CONF_ENGINE, DEFAULT_ENGINE))
+    model = entry.options.get(CONF_MODEL, entry.data.get(CONF_MODEL, DEFAULT_MODEL))
+
     timeout_val = entry.options.get(CONF_TIMEOUT)
-    if timeout_val is None or float(timeout_val) < 8.0:
+    if timeout_val is None or float(timeout_val) < 5.0:
         timeout = DEFAULT_TIMEOUT
     else:
         timeout = float(timeout_val)
@@ -39,9 +46,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     debug_logging = entry.options.get(CONF_DEBUG_LOGGING, DEFAULT_DEBUG_LOGGING)
 
     session = async_get_clientsession(hass)
-    client = LayaClient(
+    client = System1Client(
         base_url=base_url,
         api_key=api_key,
+        engine=engine,
+        model=model,
         timeout=timeout,
         session=session,
         debug_logging=debug_logging,
@@ -61,7 +70,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     unload_ok = await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
     if unload_ok:
         data = hass.data[DOMAIN].pop(entry.entry_id, {})
-        client: LayaClient | None = data.get("client")
+        client: System1Client | None = data.get("client")
         if client:
             await client.close()
 

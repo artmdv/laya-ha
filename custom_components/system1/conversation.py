@@ -22,6 +22,12 @@ from homeassistant.helpers.intent import IntentResponse, IntentResponseType
 
 from .client import (
     DecisionChoice,
+    System1AuthError,
+    System1Client,
+    System1ConnectionError,
+    System1Error,
+    System1TimeoutError,
+    # Backwards-compatibility aliases
     LayaAuthError,
     LayaClient,
     LayaConnectionError,
@@ -62,7 +68,7 @@ from .translator import async_translate_to_english
 
 try:
     from homeassistant.components.homeassistant.exposed_entities import async_should_expose
-except ImportError:
+except (ImportError, AttributeError):
     async_should_expose = None
 
 _LOGGER = logging.getLogger(__name__)
@@ -170,13 +176,13 @@ async def async_setup_entry(
     entry: ConfigEntry,
     async_add_entities: AddEntitiesCallback,
 ) -> None:
-    """Set up the Laya conversation entity from a config entry."""
-    client: LayaClient = hass.data[DOMAIN][entry.entry_id]["client"]
-    async_add_entities([LayaConversationEntity(hass, entry, client)])
+    """Set up the System-1 conversation entity from a config entry."""
+    client: System1Client = hass.data[DOMAIN][entry.entry_id]["client"]
+    async_add_entities([System1ConversationEntity(hass, entry, client)])
 
 
-class LayaConversationEntity(ConversationEntity):
-    """Conversation entity powered by Laya System-1 non-autoregressive decision engine."""
+class System1ConversationEntity(ConversationEntity):
+    """Conversation entity powered by System-1 non-autoregressive decision engine."""
 
     _attr_has_entity_name = True
 
@@ -184,7 +190,7 @@ class LayaConversationEntity(ConversationEntity):
         self,
         hass: HomeAssistant,
         entry: ConfigEntry,
-        client: LayaClient,
+        client: System1Client,
     ) -> None:
         """Initialize the conversation entity."""
         self.hass = hass
@@ -1312,3 +1318,7 @@ class LayaConversationEntity(ConversationEntity):
             response=intent_response,
             conversation_id=user_input.conversation_id,
         )
+
+
+# Backwards-compatibility alias
+LayaConversationEntity = System1ConversationEntity

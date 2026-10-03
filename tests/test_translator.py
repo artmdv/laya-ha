@@ -2,7 +2,7 @@
 
 import unittest
 from unittest.mock import AsyncMock, MagicMock
-from custom_components.laya.translator import async_translate_to_english
+from custom_components.system1.translator import async_translate_to_english
 
 
 class TestTranslator(unittest.IsolatedAsyncioTestCase):

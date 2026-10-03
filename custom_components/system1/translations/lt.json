@@ -2,29 +2,36 @@
   "config": {
     "step": {
       "user": {
-        "title": "Prisijungti prie Laya System-1",
-        "description": "Įveskite vietinio arba nuotolinio Laya System-1 serverio adresą.",
+        "title": "Prisijungti prie System-1 sprendimų serverio",
+        "description": "Pasirinkite System-1 sprendimų variklį (Clef, Laya ar bendrą /v1/systemone) ir įveskite serverio adresą.",
         "data": {
+          "engine": "Sprendimų variklis",
           "url": "Serverio URL",
+          "model": "Modelio identifikatorius",
           "api_key": "API Raktas (Neprivalomas)"
         }
       }
     },
     "error": {
-      "cannot_connect": "Nepavyko prisijungti prie Laya serverio. Patikrinkite URL ir ar konteineris veikia.",
+      "cannot_connect": "Nepavyko prisijungti prie System-1 serverio. Patikrinkite URL, modelį ir ar serveris veikia.",
       "unknown": "Įvyko netikėta klaida."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "Laya System-1 Nustatymai",
+        "title": "System-1 Nustatymai",
         "data": {
+          "engine": "Sprendimų variklis",
+          "model": "Modelio identifikatorius",
           "confidence_threshold": "Pasitikėjimo riba (0.10 - 1.00)",
           "exposed_domains": "Valdomos įrenginių kategorijos",
           "response_style": "Balso patvirtinimo stilius",
           "hierarchical_routing": "Dviejų žingsnių zonų nukreipimas (Pirma nustatyti kambarį)",
           "debug_logging": "Derinimo režimas (Registruoti pilnas užklausas ir atsakymus HA žurnale)",
+          "try_default_agent_first": "Pirma bandyti Home Assistant standartinį agentą",
+          "translate_to_english": "Versti komandas į anglų kalbą",
+          "translation_url": "Vertimo paslaugos URL",
           "timeout": "Užklausos laukimo laikas (sekundėmis)"
         }
       }

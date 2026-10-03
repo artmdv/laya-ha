@@ -1,4 +1,4 @@
-"""Config flow for Laya System-1 Conversation integration."""
+"""Config flow for System-1 Conversation integration."""
 
 from __future__ import annotations
 
@@ -10,17 +10,21 @@ import voluptuous as vol
 from homeassistant import config_entries
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
+from homeassistant.helpers import selector
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 import homeassistant.helpers.config_validation as cv
 
-from .client import LayaClient, LayaConnectionError, LayaTimeoutError
+from .client import System1Client, System1ConnectionError, System1TimeoutError
 from .const import (
     AVAILABLE_DOMAINS,
+    AVAILABLE_ENGINES,
     CONF_API_KEY,
     CONF_CONFIDENCE_THRESHOLD,
     CONF_DEBUG_LOGGING,
+    CONF_ENGINE,
     CONF_EXPOSED_DOMAINS,
     CONF_HIERARCHICAL_ROUTING,
+    CONF_MODEL,
     CONF_RESPONSE_STYLE,
     CONF_TIMEOUT,
     CONF_TRANSLATE_TO_ENGLISH,
@@ -30,8 +34,10 @@ from .const import (
     DEFAULT_API_KEY,
     DEFAULT_CONFIDENCE_THRESHOLD,
     DEFAULT_DEBUG_LOGGING,
+    DEFAULT_ENGINE,
     DEFAULT_EXPOSED_DOMAINS,
     DEFAULT_HIERARCHICAL_ROUTING,
+    DEFAULT_MODEL,
     DEFAULT_NAME,
     DEFAULT_RESPONSE_STYLE,
     DEFAULT_TIMEOUT,
@@ -40,11 +46,12 @@ from .const import (
     DEFAULT_TRY_DEFAULT_AGENT_FIRST,
     DEFAULT_URL,
     DOMAIN,
+    ENGINE_CLEF,
+    ENGINE_GENERIC,
+    ENGINE_LAYA,
     STYLE_CONCISE,
     STYLE_VERBOSE,
 )
-
-from homeassistant.helpers import selector
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -53,10 +60,10 @@ OptionsFlowBase = getattr(
 )
 
 
-class LayaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    """Handle a config flow for Laya System-1 Conversation."""
+class System1ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+    """Handle a config flow for System-1 Conversation."""
 
-    VERSION = 1
+    VERSION = 2
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -67,22 +74,30 @@ class LayaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         if user_input is not None:
             url = user_input[CONF_URL].strip().rstrip("/")
             api_key = user_input.get(CONF_API_KEY, "").strip()
+            engine = user_input.get(CONF_ENGINE, DEFAULT_ENGINE)
+            model = user_input.get(CONF_MODEL, DEFAULT_MODEL).strip()
 
             session = async_get_clientsession(self.hass)
-            client = LayaClient(base_url=url, api_key=api_key, session=session)
+            client = System1Client(
+                base_url=url,
+                api_key=api_key,
+                engine=engine,
+                model=model,
+                session=session,
+            )
 
             try:
                 is_healthy = await client.check_health()
                 if not is_healthy:
                     errors["base"] = "cannot_connect"
-            except (LayaConnectionError, LayaTimeoutError):
+            except (System1ConnectionError, System1TimeoutError):
                 errors["base"] = "cannot_connect"
             except Exception as err:
-                _LOGGER.exception("Unexpected error testing Laya server: %s", err)
+                _LOGGER.exception("Unexpected error testing System-1 server: %s", err)
                 errors["base"] = "unknown"
 
             if not errors:
-                await self.async_set_unique_id(f"laya_{url}")
+                await self.async_set_unique_id(f"system1_{url}")
                 self._abort_if_unique_id_configured()
 
                 return self.async_create_entry(
@@ -90,8 +105,12 @@ class LayaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                     data={
                         CONF_URL: url,
                         CONF_API_KEY: api_key,
+                        CONF_ENGINE: engine,
+                        CONF_MODEL: model,
                     },
                     options={
+                        CONF_ENGINE: engine,
+                        CONF_MODEL: model,
                         CONF_CONFIDENCE_THRESHOLD: DEFAULT_CONFIDENCE_THRESHOLD,
                         CONF_EXPOSED_DOMAINS: DEFAULT_EXPOSED_DOMAINS,
                         CONF_RESPONSE_STYLE: DEFAULT_RESPONSE_STYLE,
@@ -106,7 +125,27 @@ class LayaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
 
         schema = vol.Schema(
             {
+                vol.Required(CONF_ENGINE, default=DEFAULT_ENGINE): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=[
+                            selector.SelectOptionDict(
+                                value=ENGINE_CLEF,
+                                label="Clef (Local vLLM / Ollama)",
+                            ),
+                            selector.SelectOptionDict(
+                                value=ENGINE_LAYA,
+                                label="Laya (Local laya-serve)",
+                            ),
+                            selector.SelectOptionDict(
+                                value=ENGINE_GENERIC,
+                                label="Generic System-1 (/v1/systemone)",
+                            ),
+                        ],
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
                 vol.Required(CONF_URL, default=DEFAULT_URL): cv.string,
+                vol.Optional(CONF_MODEL, default=DEFAULT_MODEL): cv.string,
                 vol.Optional(CONF_API_KEY, default=DEFAULT_API_KEY): cv.string,
             }
         )
@@ -123,11 +162,11 @@ class LayaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         config_entry: config_entries.ConfigEntry,
     ) -> config_entries.OptionsFlow:
         """Create the options flow."""
-        return LayaOptionsFlowHandler(config_entry)
+        return System1OptionsFlowHandler(config_entry)
 
 
-class LayaOptionsFlowHandler(OptionsFlowBase):
-    """Handle options flow for Laya System-1."""
+class System1OptionsFlowHandler(OptionsFlowBase):
+    """Handle options flow for System-1."""
 
     def __init__(self, config_entry: config_entries.ConfigEntry) -> None:
         """Initialize options flow."""
@@ -140,7 +179,7 @@ class LayaOptionsFlowHandler(OptionsFlowBase):
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
-        """Manage Laya options."""
+        """Manage System-1 options."""
         if user_input is not None:
             return self.async_create_entry(title="", data=user_input)
 
@@ -150,6 +189,32 @@ class LayaOptionsFlowHandler(OptionsFlowBase):
             step_id="init",
             data_schema=vol.Schema(
                 {
+                    vol.Optional(
+                        CONF_ENGINE,
+                        default=options.get(CONF_ENGINE, DEFAULT_ENGINE),
+                    ): selector.SelectSelector(
+                        selector.SelectSelectorConfig(
+                            options=[
+                                selector.SelectOptionDict(
+                                    value=ENGINE_CLEF,
+                                    label="Clef (Local vLLM / Ollama)",
+                                ),
+                                selector.SelectOptionDict(
+                                    value=ENGINE_LAYA,
+                                    label="Laya (Local laya-serve)",
+                                ),
+                                selector.SelectOptionDict(
+                                    value=ENGINE_GENERIC,
+                                    label="Generic System-1 (/v1/systemone)",
+                                ),
+                            ],
+                            mode=selector.SelectSelectorMode.DROPDOWN,
+                        )
+                    ),
+                    vol.Optional(
+                        CONF_MODEL,
+                        default=options.get(CONF_MODEL, DEFAULT_MODEL),
+                    ): cv.string,
                     vol.Optional(
                         CONF_CONFIDENCE_THRESHOLD,
                         default=options.get(
@@ -245,3 +310,7 @@ class LayaOptionsFlowHandler(OptionsFlowBase):
             ),
         )
 
+
+# Backwards-compatibility alias
+LayaConfigFlow = System1ConfigFlow
+LayaOptionsFlowHandler = System1OptionsFlowHandler

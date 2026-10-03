@@ -30,8 +30,15 @@ if "homeassistant" not in sys.modules:
     ]:
         sys.modules[mod] = ha_mock
 
-from custom_components.laya.client import (
+from custom_components.system1.client import (
     DecisionChoice,
+    System1ApiError,
+    System1AuthError,
+    System1Client,
+    System1ConnectionError,
+    System1Decision,
+    System1TimeoutError,
+    # Compatibility aliases
     LayaApiError,
     LayaAuthError,
     LayaClient,
@@ -251,6 +258,55 @@ class TestLayaClient(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(results["area"].choice, "Kitchen")
         self.assertAlmostEqual(results["area"].confidence, 0.98)
 
+    @patch("aiohttp.ClientSession.post")
+    async def test_clef_engine_payload_format(self, mock_post):
+        """Test Clef engine sends string state and model identifier."""
+        clef_client = System1Client(
+            base_url="http://localhost:8000",
+            engine="clef",
+            model="cloudflare/clef-flash",
+        )
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.json = AsyncMock(
+            return_value={"answers": {"action": {"choice": "turn_on", "confidence": 0.99}}}
+        )
+        mock_resp.__aenter__.return_value = mock_resp
+        mock_post.return_value = mock_resp
+
+        await clef_client.query("turn on lights", {"action": {"type": "choice", "criteria": ["turn_on"]}})
+        call_kwargs = mock_post.call_args.kwargs
+        payload = call_kwargs["json"]
+        self.assertEqual(payload["state"], "turn on lights")
+        self.assertEqual(payload["model"], "cloudflare/clef-flash")
+        await clef_client.close()
+
+    @patch("aiohttp.ClientSession.post")
+    async def test_cloudflare_result_envelope_parsing(self, mock_post):
+        """Test Cloudflare Workers AI result envelope normalization."""
+        clef_client = System1Client(base_url="http://localhost:8000", engine="clef")
+        mock_resp = MagicMock()
+        mock_resp.status = 200
+        mock_resp.json = AsyncMock(
+            return_value={
+                "result": {
+                    "answers": {
+                        "action": {"choice": "turn_off", "confidence": 0.97}
+                    }
+                },
+                "success": True,
+            }
+        )
+        mock_resp.__aenter__.return_value = mock_resp
+        mock_post.return_value = mock_resp
+
+        results = await clef_client.query("turn off", {"action": {"type": "choice", "criteria": ["turn_off"]}})
+        self.assertIn("action", results)
+        self.assertEqual(results["action"].choice, "turn_off")
+        self.assertAlmostEqual(results["action"].confidence, 0.97)
+        await clef_client.close()
+
 
 if __name__ == "__main__":
     unittest.main()
+

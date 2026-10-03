@@ -4,68 +4,70 @@ import sys
 import unittest
 from unittest.mock import AsyncMock, MagicMock
 
-if "homeassistant" not in sys.modules:
-    ha_mock = MagicMock()
+ha_root = MagicMock()
+ha_root.__path__ = []
 
-    class _MockConversationEntity:
+class _MockConversationEntity:
+    pass
+
+class _MockIntentResponseType:
+    ACTION_DONE = "action_done"
+    ERROR = "error"
+    QUERY_ANSWER = "query_answer"
+
+class _MockIntentResponse:
+    def __init__(self, language="en"):
+        self.language = language
+        self.speech = None
+        self.speech_text = None
+
+    def async_set_speech(self, text):
+        self.speech_text = text
+        self.speech = {"plain": {"speech": text}}
+
+    def async_set_card(self, title, content):
         pass
 
-    class _MockIntentResponseType:
-        ACTION_DONE = "action_done"
-        ERROR = "error"
-        QUERY_ANSWER = "query_answer"
+    def async_set_results(self, success_results=None, failed_results=None):
+        pass
 
-    class _MockIntentResponse:
-        def __init__(self, language="en"):
-            self.language = language
-            self.speech = None
-            self.speech_text = None
+class _MockConversationResult:
+    def __init__(self, response, conversation_id=None):
+        self.response = response
+        self.conversation_id = conversation_id
 
-        def async_set_speech(self, text):
-            self.speech_text = text
-            self.speech = {"plain": {"speech": text}}
+conv_mod = MagicMock()
+conv_mod.ConversationEntity = _MockConversationEntity
+conv_mod.ConversationResult = _MockConversationResult
+conv_mod.ConversationInput = MagicMock
 
-        def async_set_card(self, title, content):
-            pass
+_default_conv_res = MagicMock()
+_default_conv_res.response.response_type = "error"
+_default_conv_res.response.data = {"code": "no_intent_match"}
+conv_mod.async_converse = AsyncMock(return_value=_default_conv_res)
 
-        def async_set_results(self, success_results=None, failed_results=None):
-            pass
+intent_mod = MagicMock()
+intent_mod.IntentResponseType = _MockIntentResponseType
+intent_mod.IntentResponse = _MockIntentResponse
 
-    class _MockConversationResult:
-        def __init__(self, response, conversation_id=None):
-            self.response = response
-            self.conversation_id = conversation_id
-
-    ha_mock.ConversationEntity = _MockConversationEntity
-    ha_mock.components.conversation.ConversationEntity = _MockConversationEntity
-    ha_mock.helpers.intent.IntentResponseType = _MockIntentResponseType
-    ha_mock.helpers.intent.IntentResponse = _MockIntentResponse
-    ha_mock.components.conversation.ConversationResult = _MockConversationResult
-
-    _default_conv_res = MagicMock()
-    _default_conv_res.response.response_type = "error"
-    _default_conv_res.response.data = {"code": "no_intent_match"}
-    ha_mock.components.conversation.async_converse = AsyncMock(return_value=_default_conv_res)
-
-    for mod in [
-        "homeassistant",
-        "homeassistant.config_entries",
-        "homeassistant.const",
-        "homeassistant.core",
-        "homeassistant.helpers",
-        "homeassistant.helpers.aiohttp_client",
-        "homeassistant.helpers.config_validation",
-        "homeassistant.helpers.entity_platform",
-        "homeassistant.helpers.intent",
-        "homeassistant.components",
-        "homeassistant.components.conversation",
-        "homeassistant.data_entry_flow",
-    ]:
-        sys.modules[mod] = ha_mock
+sys.modules["homeassistant"] = ha_root
+sys.modules["homeassistant.config_entries"] = MagicMock()
+sys.modules["homeassistant.const"] = MagicMock()
+sys.modules["homeassistant.core"] = MagicMock()
+sys.modules["homeassistant.helpers"] = MagicMock()
+sys.modules["homeassistant.helpers.aiohttp_client"] = MagicMock()
+sys.modules["homeassistant.helpers.config_validation"] = MagicMock()
+sys.modules["homeassistant.helpers.entity_platform"] = MagicMock()
+sys.modules["homeassistant.helpers.intent"] = intent_mod
+sys.modules["homeassistant.components"] = MagicMock()
+sys.modules["homeassistant.components.conversation"] = conv_mod
+sys.modules["homeassistant.components.homeassistant"] = MagicMock()
+sys.modules["homeassistant.components.homeassistant.exposed_entities"] = MagicMock()
+sys.modules["homeassistant.data_entry_flow"] = MagicMock()
 
 from homeassistant.helpers.intent import IntentResponseType
-from custom_components.laya.client import DecisionChoice
-from custom_components.laya.const import (
+from custom_components.system1.client import DecisionChoice
+from custom_components.system1.const import (
     ACTION_DEFINITIONS,
     DEFAULT_EXPOSED_DOMAINS,
     LOCALIZED_RESPONSES,
@@ -73,7 +75,10 @@ from custom_components.laya.const import (
     STYLE_CONCISE,
     STYLE_VERBOSE,
 )
-from custom_components.laya.conversation import LayaConversationEntity
+from custom_components.system1.conversation import (
+    System1ConversationEntity,
+    LayaConversationEntity,
+)
 
 
 class TestDecisionLogic(unittest.IsolatedAsyncioTestCase):
@@ -550,7 +555,7 @@ class TestDecisionLogic(unittest.IsolatedAsyncioTestCase):
         success_res.response.response_type = IntentResponseType.ACTION_DONE
         success_res.response.speech = {"plain": {"speech": "Įjungta"}}
 
-        with unittest.mock.patch("custom_components.laya.conversation.conversation.async_converse", new_callable=AsyncMock) as mock_conv:
+        with unittest.mock.patch("custom_components.system1.conversation.conversation.async_converse", new_callable=AsyncMock) as mock_conv:
             mock_conv.return_value = success_res
             res = await entity._async_process_internal(user_input)
             self.assertEqual(res, success_res)
@@ -590,7 +595,7 @@ class TestDecisionLogic(unittest.IsolatedAsyncioTestCase):
         no_match_res.response.response_type = IntentResponseType.ERROR
         no_match_res.response.data = {"code": "no_intent_match"}
 
-        with unittest.mock.patch("custom_components.laya.conversation.conversation.async_converse", new_callable=AsyncMock) as mock_conv:
+        with unittest.mock.patch("custom_components.system1.conversation.conversation.async_converse", new_callable=AsyncMock) as mock_conv:
             mock_conv.return_value = no_match_res
             with unittest.mock.patch.object(entity, "_build_target_catalog") as mock_cat:
                 mock_cat.return_value = (
@@ -631,7 +636,7 @@ class TestDecisionLogic(unittest.IsolatedAsyncioTestCase):
         user_input.context = MagicMock()
 
         with unittest.mock.patch(
-            "custom_components.laya.conversation.async_translate_to_english",
+            "custom_components.system1.conversation.async_translate_to_english",
             new_callable=AsyncMock,
         ) as mock_trans:
             mock_trans.return_value = "turn off the light in the kitchen"
@@ -811,10 +816,10 @@ class TestDecisionLogic(unittest.IsolatedAsyncioTestCase):
         def mock_expose(hass, assistant, entity_id):
             return entity_id == "light.living_room"
 
-        with unittest.mock.patch("custom_components.laya.conversation.async_should_expose", side_effect=mock_expose), \
-             unittest.mock.patch("custom_components.laya.conversation.entity_registry.async_get") as mock_ent_reg, \
-             unittest.mock.patch("custom_components.laya.conversation.device_registry.async_get") as mock_dev_reg, \
-             unittest.mock.patch("custom_components.laya.conversation.area_registry.async_get") as mock_area_reg:
+        with unittest.mock.patch("custom_components.system1.conversation.async_should_expose", side_effect=mock_expose), \
+             unittest.mock.patch("custom_components.system1.conversation.entity_registry.async_get") as mock_ent_reg, \
+             unittest.mock.patch("custom_components.system1.conversation.device_registry.async_get") as mock_dev_reg, \
+             unittest.mock.patch("custom_components.system1.conversation.area_registry.async_get") as mock_area_reg:
 
             mock_area_reg.return_value.areas = {}
             mock_ent_reg.return_value.async_get.return_value = None
@@ -860,9 +865,9 @@ class TestDecisionLogic(unittest.IsolatedAsyncioTestCase):
 
         entity = LayaConversationEntity(hass=mock_hass, entry=MagicMock(), client=MagicMock())
 
-        with unittest.mock.patch("custom_components.laya.conversation.entity_registry.async_get") as mock_ent_reg, \
-             unittest.mock.patch("custom_components.laya.conversation.device_registry.async_get") as mock_dev_reg, \
-             unittest.mock.patch("custom_components.laya.conversation.area_registry.async_get") as mock_area_reg:
+        with unittest.mock.patch("custom_components.system1.conversation.entity_registry.async_get") as mock_ent_reg, \
+             unittest.mock.patch("custom_components.system1.conversation.device_registry.async_get") as mock_dev_reg, \
+             unittest.mock.patch("custom_components.system1.conversation.area_registry.async_get") as mock_area_reg:
 
             mock_area_reg.return_value.areas = {}
             mock_ent_reg.return_value.async_get.side_effect = lambda eid: mock_mower_ent if eid == "lawn_mower.lidax_ultra_1200" else mock_battery_ent
@@ -907,7 +912,7 @@ class TestDecisionLogic(unittest.IsolatedAsyncioTestCase):
 
     def test_filter_target_candidates_mower_vs_vacuum(self):
         """Token and semantic overlap prioritizes mower target when asking about mowing grass."""
-        from custom_components.laya.conversation import filter_target_candidates
+        from custom_components.system1.conversation import filter_target_candidates
         target_map = {
             "robotą": {
                 "type": "entity",
@@ -933,7 +938,7 @@ class TestDecisionLogic(unittest.IsolatedAsyncioTestCase):
 
     def test_nominative_lt_case_normalization(self):
         """Accusative alias names are converted to nominative for spoken responses."""
-        from custom_components.laya.conversation import _nominative_lt
+        from custom_components.system1.conversation import _nominative_lt
         self.assertEqual(_nominative_lt("robotą"), "robotas")
         self.assertEqual(_nominative_lt("žoliapjovę"), "žoliapjovė")
         self.assertEqual(_nominative_lt("siurblį"), "siurblys")
@@ -1044,5 +1049,6 @@ class TestDecisionLogic(unittest.IsolatedAsyncioTestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
 
 

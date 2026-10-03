@@ -1,4 +1,4 @@
-"""Asynchronous client for the Laya System-1 decision engine."""
+"""Asynchronous client for System-1 decision engines (Clef, Laya, Jev, and /v1/systemone)."""
 
 from __future__ import annotations
 
@@ -10,32 +10,42 @@ from typing import Any
 
 import aiohttp
 
+from .const import DEFAULT_MODEL, DEFAULT_TIMEOUT, ENGINE_CLEF, ENGINE_LAYA
+
 _LOGGER = logging.getLogger(__name__)
 
 
-class LayaError(Exception):
-    """Base exception for Laya errors."""
+class System1Error(Exception):
+    """Base exception for System-1 errors."""
 
 
-class LayaConnectionError(LayaError):
-    """Connection failure to Laya server."""
+class System1ConnectionError(System1Error):
+    """Connection failure to System-1 server."""
 
 
-class LayaTimeoutError(LayaError):
-    """Timeout waiting for Laya response."""
+class System1TimeoutError(System1Error):
+    """Timeout waiting for System-1 response."""
 
 
-class LayaAuthError(LayaError):
+class System1AuthError(System1Error):
     """Authentication failure (e.g. invalid API key)."""
 
 
-class LayaApiError(LayaError):
-    """API-level error returned by Laya server."""
+class System1ApiError(System1Error):
+    """API-level error returned by System-1 server."""
+
+
+# Backwards-compatibility aliases
+LayaError = System1Error
+LayaConnectionError = System1ConnectionError
+LayaTimeoutError = System1TimeoutError
+LayaAuthError = System1AuthError
+LayaApiError = System1ApiError
 
 
 @dataclass
 class DecisionChoice:
-    """Represents a single question's decision from Laya."""
+    """Represents a single question's decision from a System-1 model."""
 
     choice: str
     confidence: float
@@ -43,7 +53,7 @@ class DecisionChoice:
 
 
 @dataclass
-class LayaDecision:
+class System1Decision:
     """Container for multi-question smart home decisions."""
 
     action: DecisionChoice
@@ -51,20 +61,28 @@ class LayaDecision:
     raw_response: dict[str, Any] = field(default_factory=dict)
 
 
-class LayaClient:
-    """Client for interacting with Laya System-1 /v1/systemone server."""
+# Backwards-compatibility alias
+LayaDecision = System1Decision
+
+
+class System1Client:
+    """Universal client for interacting with System-1 /v1/systemone decision servers."""
 
     def __init__(
         self,
         base_url: str,
         api_key: str | None = None,
-        timeout: float = 3.0,
+        engine: str = ENGINE_CLEF,
+        model: str = DEFAULT_MODEL,
+        timeout: float = DEFAULT_TIMEOUT,
         session: aiohttp.ClientSession | None = None,
         debug_logging: bool = False,
     ) -> None:
-        """Initialize the Laya client."""
+        """Initialize the System-1 client."""
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key.strip() if api_key else None
+        self.engine = engine
+        self.model = model.strip() if model else ""
         self.timeout = aiohttp.ClientTimeout(total=timeout)
         self._session = session
         self._own_session = False
@@ -90,29 +108,45 @@ class LayaClient:
         return headers
 
     async def check_health(self) -> bool:
-        """Check if the Laya server is reachable and healthy."""
+        """Check if the System-1 server is reachable and healthy across Ollama, vLLM, and laya-serve."""
         session = await self._get_session()
+        headers = self._get_headers()
+
+        # Try standard health endpoint first
+        endpoints = ["/health", "/v1/models", "/"]
+        for ep in endpoints:
+            try:
+                async with session.get(
+                    f"{self.base_url}{ep}",
+                    headers=headers,
+                    timeout=self.timeout,
+                ) as response:
+                    if response.status in (200, 204):
+                        return True
+                    if response.status not in (404, 405):
+                        _LOGGER.debug("System-1 health probe on %s returned HTTP %d", ep, response.status)
+            except (asyncio.TimeoutError, TimeoutError, aiohttp.ServerTimeoutError):
+                _LOGGER.debug("System-1 health check timed out on %s", ep)
+            except aiohttp.ClientError as err:
+                _LOGGER.debug("System-1 health check error on %s: %s", ep, err)
+            except Exception as err:
+                _LOGGER.debug("System-1 unexpected error probing %s: %s", ep, err)
+
+        # Fallback probe: send a minimal dummy query to /v1/systemone
         try:
-            async with session.get(
-                f"{self.base_url}/health",
-                headers=self._get_headers(),
-                timeout=self.timeout,
-            ) as response:
-                if response.status == 200:
-                    return True
-                _LOGGER.warning("Laya health check returned HTTP %d", response.status)
-                return False
-        except (asyncio.TimeoutError, TimeoutError, aiohttp.ServerTimeoutError):
-            _LOGGER.debug("Laya health check timed out")
-            return False
-        except aiohttp.ClientConnectorError as err:
-            _LOGGER.debug("Laya health check connector error: %s", err)
-            return False
-        except aiohttp.ClientError as err:
-            _LOGGER.debug("Laya health check client error: %s", err)
-            return False
+            test_res = await self.query(
+                command="ping",
+                questions={
+                    "ping": {
+                        "type": "choice",
+                        "instructions": "ping",
+                        "criteria": ["pong"],
+                    }
+                },
+            )
+            return bool(test_res)
         except Exception as err:
-            _LOGGER.debug("Laya health check unexpected error: %s", err)
+            _LOGGER.debug("System-1 probe via /v1/systemone failed: %s", err)
             return False
 
     async def query(
@@ -120,18 +154,24 @@ class LayaClient:
         command: str,
         questions: dict[str, Any],
     ) -> dict[str, DecisionChoice]:
-        """Send arbitrary questions to Laya for non-autoregressive neural classification."""
+        """Send arbitrary questions to System-1 for non-autoregressive neural classification."""
         session = await self._get_session()
         url = f"{self.base_url}/v1/systemone"
 
-        payload = {
-            "state": {"command": command},
+        # Format state based on engine (Clef accepts string or dict, Laya accepts dict)
+        state_payload: Any = {"command": command} if self.engine == ENGINE_LAYA else command
+
+        payload: dict[str, Any] = {
+            "state": state_payload,
             "questions": questions,
         }
+        if self.model:
+            payload["model"] = self.model
 
         if self.debug_logging:
             _LOGGER.warning(
-                "Laya [DEBUG RAW REQUEST] POST %s:\n%s",
+                "System-1 [DEBUG RAW REQUEST] (%s) POST %s:\n%s",
+                self.engine,
                 url,
                 json.dumps(payload, ensure_ascii=False, indent=2),
             )
@@ -144,29 +184,42 @@ class LayaClient:
                 timeout=self.timeout,
             ) as response:
                 if response.status in (401, 403):
-                    raise LayaAuthError(f"Authentication failed with HTTP {response.status}")
+                    raise System1AuthError(f"Authentication failed with HTTP {response.status}")
+
+                # If server complains about string state format, auto-retry with dict format
+                if response.status == 400 and not isinstance(state_payload, dict):
+                    payload["state"] = {"command": command}
+                    async with session.post(
+                        url,
+                        json=payload,
+                        headers=self._get_headers(),
+                        timeout=self.timeout,
+                    ) as retry_resp:
+                        if retry_resp.status == 200:
+                            response = retry_resp
 
                 if response.status != 200:
                     error_text = await response.text()
                     if self.debug_logging:
                         _LOGGER.warning(
-                            "Laya [DEBUG RAW ERROR RESPONSE] HTTP %d: %s",
+                            "System-1 [DEBUG RAW ERROR RESPONSE] HTTP %d: %s",
                             response.status,
                             error_text,
                         )
-                    raise LayaApiError(
-                        f"Laya server returned HTTP {response.status}: {error_text}"
+                    raise System1ApiError(
+                        f"System-1 server returned HTTP {response.status}: {error_text}"
                     )
 
                 data = await response.json()
                 if self.debug_logging:
                     _LOGGER.warning(
-                        "Laya [DEBUG RAW RESPONSE] HTTP %d:\n%s",
+                        "System-1 [DEBUG RAW RESPONSE] HTTP %d:\n%s",
                         response.status,
                         json.dumps(data, ensure_ascii=False, indent=2),
                     )
 
-                answers = data.get("answers", {})
+                # Normalize answers from direct System-1 schema or nested result wrapper
+                answers = data.get("answers") or data.get("result", {}).get("answers", {})
                 result: dict[str, DecisionChoice] = {}
                 for q_name, q_data in answers.items():
                     result[q_name] = DecisionChoice(
@@ -179,16 +232,16 @@ class LayaClient:
                 return result
 
         except (asyncio.TimeoutError, TimeoutError, aiohttp.ServerTimeoutError) as err:
-            raise LayaTimeoutError(
-                f"Timed out communicating with Laya server after {self.timeout.total}s"
+            raise System1TimeoutError(
+                f"Timed out communicating with System-1 server after {self.timeout.total}s"
             ) from err
         except aiohttp.ClientConnectorError as err:
-            raise LayaConnectionError(
-                f"Failed to connect to Laya server at {self.base_url}: {err}"
+            raise System1ConnectionError(
+                f"Failed to connect to System-1 server at {self.base_url}: {err}"
             ) from err
         except aiohttp.ClientError as err:
-            raise LayaConnectionError(
-                f"Network error communicating with Laya server: {err}"
+            raise System1ConnectionError(
+                f"Network error communicating with System-1 server: {err}"
             ) from err
 
     async def decide(
@@ -196,8 +249,8 @@ class LayaClient:
         command: str,
         action_criteria: dict[str, str] | list[str],
         target_criteria: list[str] | dict[str, str],
-    ) -> LayaDecision:
-        """Send a natural language voice command to Laya for System-1 classification.
+    ) -> System1Decision:
+        """Send a natural language voice command to System-1 for classification.
 
         Args:
             command: The transcribed user sentence (e.g. 'turn off living room light')
@@ -205,7 +258,7 @@ class LayaClient:
             target_criteria: Available device/area target names or dict of target->description
 
         Returns:
-            LayaDecision with parsed action and target choices
+            System1Decision with parsed action and target choices
         """
         questions = {
             "action": {
@@ -226,11 +279,11 @@ class LayaClient:
         target_choice = res.get(
             "target", DecisionChoice(choice="", confidence=0.0, probabilities={})
         )
-        return LayaDecision(action=action_choice, target=target_choice)
+        return System1Decision(action=action_choice, target=target_choice)
 
-    def _parse_response(self, data: dict[str, Any]) -> LayaDecision:
+    def _parse_response(self, data: dict[str, Any]) -> System1Decision:
         """Parse the /v1/systemone JSON response into structured dataclasses."""
-        answers = data.get("answers", {})
+        answers = data.get("answers") or data.get("result", {}).get("answers", {})
 
         action_data = answers.get("action", {})
         action_choice = DecisionChoice(
@@ -246,4 +299,8 @@ class LayaClient:
             probabilities=target_data.get("probabilities", {}),
         )
 
-        return LayaDecision(action=action_choice, target=target_choice, raw_response=data)
+        return System1Decision(action=action_choice, target=target_choice, raw_response=data)
+
+
+# Backwards-compatibility alias
+LayaClient = System1Client

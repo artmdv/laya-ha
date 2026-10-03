@@ -2,29 +2,36 @@
   "config": {
     "step": {
       "user": {
-        "title": "Connect to Laya System-1",
-        "description": "Enter the URL of your local or remote Laya System-1 inference server.",
+        "title": "Connect to System-1 Decision Server",
+        "description": "Select your System-1 decision engine (Clef, Laya, or generic /v1/systemone) and enter the server endpoint.",
         "data": {
+          "engine": "Decision Engine",
           "url": "Server URL",
+          "model": "Model Identifier",
           "api_key": "API Key (Optional)"
         }
       }
     },
     "error": {
-      "cannot_connect": "Failed to connect to Laya server. Check URL and ensure the server is running.",
+      "cannot_connect": "Failed to connect to System-1 server. Check URL, model, and ensure the server is running.",
       "unknown": "An unexpected error occurred."
     }
   },
   "options": {
     "step": {
       "init": {
-        "title": "Laya System-1 Settings",
+        "title": "System-1 Settings",
         "data": {
+          "engine": "Decision Engine",
+          "model": "Model Identifier",
           "confidence_threshold": "Confidence Threshold (0.10 - 1.00)",
           "exposed_domains": "Exposed Domains to Control",
           "response_style": "Voice Confirmation Style",
           "hierarchical_routing": "Two-step Area Routing (Resolve Room First)",
           "debug_logging": "Debug Mode (Log raw requests & responses to HA log)",
+          "try_default_agent_first": "Try Home Assistant Built-in Agent First",
+          "translate_to_english": "Translate Commands to English",
+          "translation_url": "Translation Service URL",
           "timeout": "Inference Timeout (seconds)"
         }
       }

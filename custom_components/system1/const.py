@@ -1,11 +1,21 @@
-"""Constants for the Laya System-1 Conversation integration."""
+"""Constants for the System-1 Conversation integration."""
 
-DOMAIN = "laya"
-DEFAULT_NAME = "Laya System-1"
+DOMAIN = "system1"
+DEFAULT_NAME = "System-1 Conversation"
 
 # Configuration Keys
 CONF_URL = "url"
 DEFAULT_URL = "http://localhost:8000"
+
+CONF_ENGINE = "engine"
+ENGINE_CLEF = "clef"
+ENGINE_LAYA = "laya"
+ENGINE_GENERIC = "generic"
+DEFAULT_ENGINE = ENGINE_CLEF
+AVAILABLE_ENGINES = [ENGINE_CLEF, ENGINE_LAYA, ENGINE_GENERIC]
+
+CONF_MODEL = "model"
+DEFAULT_MODEL = "cloudflare/clef-flash"
 
 CONF_API_KEY = "api_key"
 DEFAULT_API_KEY = ""
@@ -16,7 +26,7 @@ DEFAULT_TIMEOUT = 10.0
 CONF_CONFIDENCE_THRESHOLD = "confidence_threshold"
 DEFAULT_CONFIDENCE_THRESHOLD = 0.50
 
-# Maximum candidates sent to Laya to stay safely under head_max_len=256 and speed up inference
+# Maximum candidates sent to System-1 to stay safely under head_max_len=256 and speed up inference
 MAX_TARGET_CANDIDATES = 100
 
 CONF_EXPOSED_DOMAINS = "exposed_domains"
